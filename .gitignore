@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+runtime_state.json
+telegram_state.json
+indices_macro_state.json
+calibration.json
+daily_review.json
+missed_opportunities.json
+backtest_cache/
+backtest_output/
+artifacts/

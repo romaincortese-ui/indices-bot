@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "indices-bot"
+version = "0.1.0"
+description = "OANDA indices trading bot with long/short strategy evaluation, news-aware risk controls, Telegram alerts, and backtesting."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "requests>=2.31.0",
+  "redis>=5.0.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0"]
+
+[project.scripts]
+indices-bot = "indicesbot.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["indicesbot*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
