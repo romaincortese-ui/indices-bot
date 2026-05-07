@@ -167,16 +167,16 @@ class IndicesRuntime:
                 self.telegram.send(_events_message(load_macro_state(self.config.macro_state_file)))
             elif text == "/pause":
                 state["paused"] = True
-                self.telegram.send("Indices Bot paused. Existing positions will still be monitored.")
+                self.telegram.send("Indices Bot paused. New entries are paused; existing positions remain monitored.")
             elif text == "/resume":
                 state["paused"] = False
-                self.telegram.send("Indices Bot resumed. New entries are allowed again.")
+                self.telegram.send("Indices Bot resumed. New entries are allowed again on the next scan.")
             elif text == "/sync":
                 state["sync_requested"] = True
-                self.telegram.send("Sync requested. The runtime will refresh broker state on the next cycle.")
+                self.telegram.send("Broker sync request recorded. Closed-position sync also runs automatically each cycle.")
             elif text == "/closeall":
                 state["close_all_requested"] = True
-                self.telegram.send("Close-all requested. The runtime will process this on the next cycle.")
+                self.telegram.send("Close-all request recorded for operator follow-up. This runtime does not automatically close trades yet.")
             elif text in {"/help", "help"}:
                 self.telegram.send(help_message())
         self.telegram.save_offset(offset)
@@ -198,19 +198,28 @@ def all_candle_range(candles: list[Any]) -> float:
 def _open_positions_message(state: dict[str, Any]) -> str:
     rows = state.get("open_positions", []) if isinstance(state.get("open_positions"), list) else []
     if not rows:
-        return "No open indices positions."
-    lines = ["Open indices positions"]
-    for row in rows:
-        lines.append(f"{row.get('symbol')} {row.get('direction')} {row.get('strategy')} units={row.get('units')} entry={row.get('entry_price')}")
+        return "No open index positions are tracked right now."
+    lines = ["Open Indices Positions", "Tracked in runtime state."]
+    for row in rows[:10]:
+        if not isinstance(row, dict):
+            continue
+        target = row.get("take_profit_price") or "managed exit"
+        lines.append("")
+        lines.append(f"{row.get('symbol', '?')} {row.get('direction', '?')} | {row.get('strategy', '?')}")
+        lines.append(f"Instrument: {row.get('instrument', '?')} | Units: {row.get('units', '?')} | Order ID: {row.get('order_id', '?')}")
+        lines.append(f"Entry: {row.get('entry_price', '?')} | Stop: {row.get('stop_price', '?')} | Target: {target}")
+    if len(rows) > 10:
+        lines.append(f"+{len(rows) - 10} more")
     return "\n".join(lines)
 
 
 def _events_message(macro_state: dict[str, Any]) -> str:
     events = macro_state.get("events", []) if isinstance(macro_state.get("events"), list) else []
     if not events:
-        return "No high-impact index events currently cached."
-    lines = ["Cached index events"]
+        return "No high-impact index events are currently cached."
+    lines = ["Cached Index Events"]
     for event in events[:8]:
         if isinstance(event, dict):
-            lines.append(f"{event.get('region', 'GLOBAL')} {event.get('impact', '')}: {event.get('title')} at {event.get('occurs_at')}")
+            lines.append(f"{event.get('region', 'GLOBAL')} {event.get('impact', '')}: {event.get('title')}")
+            lines.append(f"At: {event.get('occurs_at')}")
     return "\n".join(lines)
