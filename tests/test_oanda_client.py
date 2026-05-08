@@ -45,3 +45,22 @@ def test_live_order_uses_signed_units(monkeypatch) -> None:
     assert body["order"]["units"] == "-2"
     assert body["order"]["stopLossOnFill"]["price"] == "5120"
     assert response["orderFillTransaction"]["tradeOpened"]["tradeID"] == "99"
+
+
+def test_close_trade_requests_full_trade_close(monkeypatch) -> None:
+    monkeypatch.setenv("OANDA_ACCOUNT_ID", "acct")
+    monkeypatch.setenv("OANDA_API_TOKEN", "token")
+    monkeypatch.setenv("PAPER_TRADE", "false")
+    monkeypatch.setenv("LIVE_TRADING_ENABLED", "true")
+    monkeypatch.setenv("EXECUTION_MODE", "paper")
+    config = IndicesConfig.from_env()
+    session = Session()
+    client = OandaClient(config, session=session)
+
+    client.close_trade("159")
+
+    method, url, kwargs = session.calls[-1]
+    body = json.loads(kwargs["data"])
+    assert method == "PUT"
+    assert url.endswith("/v3/accounts/acct/trades/159/close")
+    assert body == {"units": "ALL"}

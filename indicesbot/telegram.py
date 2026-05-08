@@ -189,6 +189,18 @@ def trade_closed_message(row: dict[str, Any], *, reason: str) -> str:
     ])
 
 
+def profit_lock_message(row: dict[str, Any]) -> str:
+    return "\n".join([
+        "Indices Profit Taken: Peak Pullback",
+        f"Symbol: {row.get('symbol', 'unknown')}",
+        f"Instrument: {row.get('instrument', 'unknown')}",
+        f"Direction: {row.get('direction', 'unknown')}",
+        f"P&L: {_format_percent(row.get('pnl_pct'))} | Peak: {_format_percent(row.get('peak_pnl_pct'))}",
+        f"Pullback: {_format_points(row.get('pullback_from_peak_pct'))} pts",
+        f"Order ID: {row.get('order_id', 'unknown')}",
+    ])
+
+
 def help_message() -> str:
     return "\n".join([
         "Indices Bot commands",
@@ -201,3 +213,19 @@ def help_message() -> str:
         "/closeall - record a close-all request for operator follow-up",
         "/help - show this help message",
     ])
+
+
+def _format_percent(value: object) -> str:
+    try:
+        amount = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return "n/a"
+    sign = "+" if amount >= 0 else ""
+    return f"{sign}{amount:.2f}%"
+
+
+def _format_points(value: object) -> str:
+    try:
+        return f"{float(value):.2f}"
+    except (TypeError, ValueError):
+        return "n/a"

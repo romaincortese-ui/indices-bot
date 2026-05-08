@@ -123,6 +123,9 @@ class IndicesConfig:
     daily_loss_halt_pct: float
     rolling_dd_throttle_pct: float
     rolling_dd_halt_pct: float
+    profit_lock_enabled: bool
+    profit_lock_trigger_pct: float
+    profit_lock_pullback_pct: float
     max_entry_spread_atr: float
     adaptive_spread_enabled: bool
     adaptive_spread_window_minutes: int
@@ -187,6 +190,9 @@ class IndicesConfig:
             daily_loss_halt_pct=env_float("DAILY_LOSS_HALT_PCT", 0.015),
             rolling_dd_throttle_pct=env_float("ROLLING_DD_THROTTLE_PCT", 0.05),
             rolling_dd_halt_pct=env_float("ROLLING_DD_HALT_PCT", 0.10),
+            profit_lock_enabled=env_bool("PROFIT_LOCK_ENABLED", True),
+            profit_lock_trigger_pct=env_float("PROFIT_LOCK_TRIGGER_PCT", 15.0),
+            profit_lock_pullback_pct=env_float("PROFIT_LOCK_PULLBACK_PCT", 2.0),
             max_entry_spread_atr=env_float("MAX_ENTRY_SPREAD_ATR", 0.08),
             adaptive_spread_enabled=env_bool("ADAPTIVE_SPREAD_ENABLED", True),
             adaptive_spread_window_minutes=env_int("ADAPTIVE_SPREAD_WINDOW_MINUTES", 30),

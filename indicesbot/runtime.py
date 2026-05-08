@@ -16,7 +16,7 @@ from indicesbot.risk import can_open, fill_price_from_response, order_id_from_re
 from indicesbot.spread_tracker import SpreadTracker
 from indicesbot.state import StateStore
 from indicesbot.strategies import evaluate_all, select_best_opportunity
-from indicesbot.telegram import TelegramClient, help_message, order_opened_message, order_rejected_message, opportunity_message, startup_message, status_message, trade_closed_message
+from indicesbot.telegram import TelegramClient, help_message, order_opened_message, order_rejected_message, opportunity_message, profit_lock_message, startup_message, status_message, trade_closed_message
 
 
 log = logging.getLogger(__name__)
@@ -49,6 +49,11 @@ class IndicesRuntime:
         closed = self._sync_closed_positions(state)
         for row in closed:
             self.telegram.send(trade_closed_message(row, reason="not_in_oanda_open_positions"))
+        profit_updates, profit_errors = self._apply_profit_protection(state)
+        for row in profit_updates:
+            self.telegram.send(profit_lock_message(row))
+        if profit_errors:
+            state["last_profit_protection_errors"] = profit_errors[:5]
         if state.get("paused") or state.get("halted"):
             state["last_scan"] = {"status": "paused" if state.get("paused") else "halted", "blocked_by": "paused_or_halted", "at": now.isoformat()}
             self._save_status(state, "paused")
@@ -150,6 +155,100 @@ class IndicesRuntime:
             state.setdefault("events", []).append({"type": "trade_closed", "symbol": row.get("symbol"), "order_id": row.get("order_id"), "at": datetime.now(timezone.utc).isoformat()})
         return closed
 
+    def _apply_profit_protection(self, state: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        updates: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+        if not self.config.profit_lock_enabled or self.config.paper_trade or not self.config.live_trading_enabled or not self.config.has_oanda_credentials:
+            state["last_profit_protection_updates"] = []
+            return updates, errors
+        rows = state.get("open_positions", []) if isinstance(state.get("open_positions"), list) else []
+        if not rows:
+            state["last_profit_protection_updates"] = []
+            return updates, errors
+        try:
+            trades = self.client.open_trades()
+        except RuntimeError as exc:
+            errors.append({"stage": "profit_lock_open_trades", "error": str(exc)})
+            state["last_profit_protection_errors"] = errors[:5]
+            return updates, errors
+        trades_by_id = {str(trade.get("id") or ""): trade for trade in trades if isinstance(trade, dict) and trade.get("id")}
+        trades_by_instrument: dict[str, dict[str, object]] = {}
+        for trade in trades:
+            if not isinstance(trade, dict):
+                continue
+            instrument = str(trade.get("instrument") or "").strip().upper()
+            if instrument and instrument not in trades_by_instrument:
+                trades_by_instrument[instrument] = trade
+        kept_rows: list[dict[str, Any]] = []
+        now = datetime.now(timezone.utc)
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            instrument = str(row.get("instrument") or "").strip().upper()
+            trade_id = str(row.get("order_id") or "").strip()
+            trade = trades_by_id.get(trade_id) or trades_by_instrument.get(instrument)
+            if not instrument or not trade_id or not isinstance(trade, dict):
+                kept_rows.append(row)
+                continue
+            self._enrich_row_from_trade(row, trade)
+            pnl_pct = _position_pnl_pct(row)
+            if pnl_pct is None:
+                kept_rows.append(row)
+                continue
+            metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+            metadata = dict(metadata)
+            peak_pnl_pct = _float_or_none(metadata.get("peak_pnl_pct"))
+            if peak_pnl_pct is None or pnl_pct > peak_pnl_pct:
+                peak_pnl_pct = pnl_pct
+                metadata["peak_pnl_pct"] = peak_pnl_pct
+                metadata["peak_seen_at"] = now.isoformat()
+                metadata["peak_current_value"] = _position_current_value(row)
+                metadata["peak_unrealized_pl"] = _position_unrealized_pl(row)
+                row["metadata"] = metadata
+            pullback_pct = peak_pnl_pct - pnl_pct
+            if peak_pnl_pct < max(0.0, self.config.profit_lock_trigger_pct) or pullback_pct < max(0.0, self.config.profit_lock_pullback_pct) or pnl_pct <= 0.0:
+                kept_rows.append(row)
+                continue
+            try:
+                self.client.close_trade(trade_id)
+            except RuntimeError as exc:
+                errors.append({"symbol": row.get("symbol") or instrument, "instrument": instrument, "stage": "profit_lock_close", "error": str(exc)})
+                kept_rows.append(row)
+                continue
+            row["pnl_pct"] = pnl_pct
+            row["peak_pnl_pct"] = peak_pnl_pct
+            row["pullback_from_peak_pct"] = pullback_pct
+            row["closed_at"] = now.isoformat()
+            row["exit_reason"] = "peak_pullback_profit_lock"
+            updates.append(dict(row))
+            state.setdefault("events", []).append({"type": "profit_lock_closed", "symbol": row.get("symbol"), "order_id": trade_id, "peak_pnl_pct": peak_pnl_pct, "pnl_pct": pnl_pct, "at": now.isoformat()})
+        state["open_positions"] = kept_rows
+        state["last_profit_protection_updates"] = updates
+        state["last_profit_protection_errors"] = errors[:5]
+        return updates, errors
+
+    def _enrich_row_from_trade(self, row: dict[str, Any], trade: dict[str, object]) -> None:
+        entry_budget = _float_or_none(trade.get("initialMarginRequired"))
+        if entry_budget is None or entry_budget <= 0:
+            entry_budget = _float_or_none(trade.get("marginUsed"))
+        if entry_budget is not None and entry_budget > 0:
+            row["entry_budget"] = entry_budget
+            row["initial_margin_required"] = _float_or_none(trade.get("initialMarginRequired"))
+            row["margin_used"] = _float_or_none(trade.get("marginUsed"))
+        unrealized_pl = _float_or_none(trade.get("unrealizedPL"))
+        if unrealized_pl is not None:
+            row["unrealized_pl"] = unrealized_pl
+        if entry_budget is not None and unrealized_pl is not None:
+            row["current_value"] = entry_budget + unrealized_pl
+        price = _float_or_none(trade.get("price"))
+        if price is not None and price > 0:
+            row["entry_price"] = price
+        units = _float_or_none(trade.get("currentUnits"))
+        if units is not None and units != 0.0:
+            row["order_units"] = units
+            row["units"] = abs(units)
+            row["direction"] = "LONG" if units > 0 else "SHORT"
+
     def _service_telegram(self, state: dict[str, Any]) -> None:
         if not self.telegram.enabled:
             return
@@ -193,6 +292,54 @@ class IndicesRuntime:
 def all_candle_range(candles: list[Any]) -> float:
     values = [max(0.0, candle.high - candle.low) for candle in candles[-14:]]
     return sum(values) / len(values) if values else 0.0
+
+
+def _float_or_none(value: object) -> float | None:
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def _position_entry_budget(row: dict[str, Any]) -> float | None:
+    for key in ("entry_budget", "initial_margin_required", "margin_used"):
+        value = _float_or_none(row.get(key))
+        if value is not None and value > 0:
+            return value
+    metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    value = _float_or_none(metadata.get("risk_amount"))
+    return value if value is not None and value > 0 else None
+
+
+def _position_unrealized_pl(row: dict[str, Any]) -> float | None:
+    for key in ("unrealized_pl", "unrealizedPL"):
+        value = _float_or_none(row.get(key))
+        if value is not None:
+            return value
+    entry_budget = _position_entry_budget(row)
+    current_value = _float_or_none(row.get("current_value"))
+    if entry_budget is not None and current_value is not None:
+        return current_value - entry_budget
+    return None
+
+
+def _position_current_value(row: dict[str, Any]) -> float | None:
+    current_value = _float_or_none(row.get("current_value"))
+    if current_value is not None:
+        return current_value
+    entry_budget = _position_entry_budget(row)
+    unrealized_pl = _position_unrealized_pl(row)
+    if entry_budget is not None and unrealized_pl is not None:
+        return entry_budget + unrealized_pl
+    return None
+
+
+def _position_pnl_pct(row: dict[str, Any]) -> float | None:
+    entry_budget = _position_entry_budget(row)
+    unrealized_pl = _position_unrealized_pl(row)
+    if entry_budget is None or entry_budget <= 0 or unrealized_pl is None:
+        return None
+    return unrealized_pl / entry_budget * 100.0
 
 
 def _open_positions_message(state: dict[str, Any]) -> str:
