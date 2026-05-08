@@ -129,6 +129,24 @@ Run calibration/backtest:
 indices-bot calibrate
 ```
 
+Run a 30-day online-data backtest:
+
+```powershell
+$env:BACKTEST_OUTPUT_DIR="backtest_output\online_30d"
+python -m indicesbot.backtest.run_backtest --days 30 --data-source online --granularity M15
+```
+
+`--data-source online` uses OANDA candles when OANDA credentials are configured and otherwise falls back to public Yahoo Finance index candles. The default `indices-bot calibrate` path remains synthetic so tests and local smoke runs do not require network access.
+
+Run a calibrated 30-day online backtest after the latest market-data pull:
+
+```powershell
+$env:BACKTEST_OUTPUT_DIR="backtest_output\online_30d_calibrated"
+python -m indicesbot.backtest.run_backtest --days 30 --data-source online --granularity M15 --calibrate-first --min-score 78 --max-hold-bars 12
+```
+
+`--calibrate-first` runs an uncalibrated baseline pass on the loaded candles, applies the bot's existing symbol/strategy/direction calibration score adjustments, then writes the calibrated final summary. This is intended for research review before changing live environment variables.
+
 ## Railway
 
 Use one repo with three services or commands:

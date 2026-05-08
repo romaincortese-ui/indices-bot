@@ -17,3 +17,8 @@ def test_backtest_writes_artifacts(tmp_path, monkeypatch) -> None:
     assert (tmp_path / "calibration.json").exists()
     summary = json.loads((tmp_path / "out" / "summary.json").read_text(encoding="utf-8"))
     assert "total_trades" in summary
+    assert summary["data_source"] == "synthetic"
+    assert summary["symbols"] == ["SPX500"]
+    assert summary["calibration_source"] == "none"
+    if summary["trades"]:
+        assert "exit_reason" in summary["trades"][0]
