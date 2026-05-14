@@ -138,10 +138,36 @@ class OandaClient:
         if self.config.paper_trade or not self.config.has_oanda_credentials:
             return 1.0
         try:
-            quote = self.current_quote("CONVERSION", instrument)
+            payload = self._request(
+                "GET",
+                f"/v3/accounts/{self.config.oanda_account_id}/pricing?{urlencode({'instruments': instrument, 'includeHomeConversions': 'true'})}",
+            )
         except Exception:
             return 1.0
-        return quote.mid if quote.mid > 0 else 1.0
+        conversions = payload.get("homeConversions", []) if isinstance(payload, dict) else []
+        if not isinstance(conversions, list) or not conversions:
+            return 1.0
+        # The instrument's quote currency conversion is the one whose pair matches the second half of the instrument
+        # e.g. SPX500_USD -> USD; DE30_EUR -> EUR. Find it by `currency` field.
+        quote_ccy = instrument.split("_")[-1].upper() if "_" in instrument else ""
+        entry = None
+        for item in conversions:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("currency", "")).upper() == quote_ccy:
+                entry = item
+                break
+        if entry is None:
+            entry = next((item for item in conversions if isinstance(item, dict)), None)
+        if not isinstance(entry, dict):
+            return 1.0
+        # For a LONG (positive PL in quote ccy), use positionValue. For a SHORT (negative PL), use negativePositionValue.
+        key = "positionValue" if side.upper() == "LONG" else "negativePositionValue"
+        try:
+            factor = float(entry.get(key) or entry.get("positionValue") or 0.0)
+        except (TypeError, ValueError):
+            factor = 0.0
+        return factor if factor > 0 else 1.0
 
     def _instrument_details(self) -> dict[str, InstrumentDetails]:
         if self._instrument_cache is not None:

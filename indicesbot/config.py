@@ -123,6 +123,9 @@ class IndicesConfig:
     daily_loss_halt_pct: float
     rolling_dd_throttle_pct: float
     rolling_dd_halt_pct: float
+    min_score: float
+    max_hold_bars: int
+    bar_minutes: int
     profit_lock_enabled: bool
     profit_lock_trigger_pct: float
     profit_lock_pullback_pct: float
@@ -179,14 +182,17 @@ class IndicesConfig:
             daily_review_key=env_str("INDICES_DAILY_REVIEW_KEY", "bot_assessor:indices:daily_review"),
             overlay_key=env_str("INDICES_OVERLAY_KEY", "bot_assessor:indices:overlays"),
             budget_allocation=min(1.0, max(0.0, env_float("INDICES_BUDGET_ALLOCATION", 1.0))),
-            max_risk_per_trade=env_float("MAX_RISK_PER_TRADE", 0.006),
-            max_total_indices_risk=env_float("MAX_TOTAL_INDICES_RISK", 0.025),
+            max_risk_per_trade=env_float("MAX_RISK_PER_TRADE", 0.003),
+            max_total_indices_risk=env_float("MAX_TOTAL_INDICES_RISK", 0.012),
             max_open_indices_trades=env_int("MAX_OPEN_INDICES_TRADES", 3),
             max_open_per_region=env_int("MAX_OPEN_PER_REGION", 2),
             max_open_per_symbol=env_int("MAX_OPEN_PER_SYMBOL", 1),
             max_live_orders_per_scan=env_int("MAX_LIVE_ORDERS_PER_SCAN", 1),
-            max_margin_per_entry_pct=env_float("MAX_MARGIN_PER_ENTRY_PCT", 0.20),
-            min_margin_per_entry_pct=env_float("MIN_MARGIN_PER_ENTRY_PCT", 0.05),
+            max_margin_per_entry_pct=env_float("MAX_MARGIN_PER_ENTRY_PCT", 0.08),
+            min_margin_per_entry_pct=env_float("MIN_MARGIN_PER_ENTRY_PCT", 0.02),
+            min_score=env_float("INDICES_MIN_SCORE", 78.0),
+            max_hold_bars=env_int("INDICES_MAX_HOLD_BARS", 12),
+            bar_minutes=env_int("INDICES_BAR_MINUTES", 15),
             daily_loss_halt_pct=env_float("DAILY_LOSS_HALT_PCT", 0.015),
             rolling_dd_throttle_pct=env_float("ROLLING_DD_THROTTLE_PCT", 0.05),
             rolling_dd_halt_pct=env_float("ROLLING_DD_HALT_PCT", 0.10),

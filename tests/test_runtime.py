@@ -157,3 +157,22 @@ def test_profit_protection_records_new_peak_without_closing(tmp_path, monkeypatc
     assert updates == []
     assert client.closed_trades == []
     assert state["open_positions"][0]["metadata"]["peak_pnl_pct"] == 39.0
+
+
+def test_time_stop_closes_aged_paper_position(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("INDICES_STATE_FILE", str(tmp_path / "state.json"))
+    monkeypatch.setenv("INDICES_DAILY_REVIEW_FILE", str(tmp_path / "review.json"))
+    monkeypatch.setenv("INDICES_MACRO_STATE_FILE", str(tmp_path / "macro.json"))
+    config = replace(IndicesConfig.from_env(), max_hold_bars=12, bar_minutes=15)
+    runtime = IndicesRuntime(config, client=Client(), telegram=Telegram())
+    now = datetime.now(timezone.utc)
+    old = (now - timedelta(hours=10)).isoformat()
+    state = {"open_positions": [
+        {"symbol": "SPX500", "instrument": "SPX500_USD", "order_id": "P1", "opened_at": old},
+        {"symbol": "NAS100", "instrument": "NAS100_USD", "order_id": "P2", "opened_at": now.isoformat()},
+    ]}
+
+    stopped = runtime._apply_time_stop(state, now)
+
+    assert [row["order_id"] for row in stopped] == ["P1"]
+    assert [row["order_id"] for row in state["open_positions"]] == ["P2"]

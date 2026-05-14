@@ -22,6 +22,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-hold-bars", type=int, default=16)
     parser.add_argument("--use-calibration", default="")
     parser.add_argument("--calibrate-first", action="store_true")
+    parser.add_argument("--walk-forward", type=float, default=0.0, help="Fraction (0-1) of bars to use for in-sample calibration; remainder is out-of-sample test. 0 disables.")
     args = parser.parse_args(argv)
     config = load_config()
     days = args.days or config.backtest_days
@@ -40,7 +41,26 @@ def main(argv: list[str] | None = None) -> int:
         baseline_summary = run_backtest(config, candles_by_symbol, min_score=72.0, max_hold_bars=16)
         calibration = calibration_from_summary(baseline_summary)
         calibration_source = "current_backtest_baseline"
-    summary = run_backtest(config, candles_by_symbol, min_score=args.min_score, max_hold_bars=args.max_hold_bars, calibration=calibration)
+    if args.walk_forward and 0.0 < args.walk_forward < 1.0:
+        in_sample: dict[str, list] = {}
+        out_sample: dict[str, list] = {}
+        for symbol, bars in candles_by_symbol.items():
+            split = max(1, int(len(bars) * args.walk_forward))
+            in_sample[symbol] = bars[:split]
+            out_sample[symbol] = bars[split:]
+        is_summary = run_backtest(config, in_sample, min_score=args.min_score, max_hold_bars=args.max_hold_bars)
+        is_calibration = calibration_from_summary(is_summary)
+        oos_summary = run_backtest(config, out_sample, min_score=args.min_score, max_hold_bars=args.max_hold_bars, calibration=is_calibration)
+        summary = oos_summary
+        summary["walk_forward"] = {
+            "in_sample_fraction": args.walk_forward,
+            "in_sample": {key: is_summary.get(key) for key in ("total_trades", "total_pnl", "return_pct", "profit_factor", "win_rate", "max_drawdown")},
+            "out_of_sample": {key: oos_summary.get(key) for key in ("total_trades", "total_pnl", "return_pct", "profit_factor", "win_rate", "max_drawdown")},
+        }
+        calibration = is_calibration
+        calibration_source = "walk_forward_in_sample"
+    else:
+        summary = run_backtest(config, candles_by_symbol, min_score=args.min_score, max_hold_bars=args.max_hold_bars, calibration=calibration)
     summary["data_source"] = args.data_source
     summary["data_sources"] = data_sources
     summary["days"] = days

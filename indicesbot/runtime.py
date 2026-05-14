@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from indicesbot.calibration import load_calibration, strategy_adjustment
@@ -49,6 +49,9 @@ class IndicesRuntime:
         closed = self._sync_closed_positions(state)
         for row in closed:
             self.telegram.send(trade_closed_message(row, reason="not_in_oanda_open_positions"))
+        time_stopped = self._apply_time_stop(state, now)
+        for row in time_stopped:
+            self.telegram.send(trade_closed_message(row, reason="max_hold_time_stop"))
         profit_updates, profit_errors = self._apply_profit_protection(state)
         for row in profit_updates:
             self.telegram.send(profit_lock_message(row))
@@ -101,7 +104,7 @@ class IndicesRuntime:
             all_opportunities.extend(adjusted)
             all_reasons.extend([f"{symbol}:{reason}" for reason in reasons])
         state["signals_seen"] = int(state.get("signals_seen", 0) or 0) + len(all_opportunities)
-        best = select_best_opportunity(all_opportunities)
+        best = select_best_opportunity(all_opportunities, min_score=self.config.min_score)
         if best is None:
             state["last_scan"] = {"status": "idle", "blocked_by": "score_below_threshold", "reasons": all_reasons[-25:], "at": now.isoformat()}
             self._save_status(state, "idle")
@@ -155,22 +158,72 @@ class IndicesRuntime:
             state.setdefault("events", []).append({"type": "trade_closed", "symbol": row.get("symbol"), "order_id": row.get("order_id"), "at": datetime.now(timezone.utc).isoformat()})
         return closed
 
+    def _apply_time_stop(self, state: dict[str, Any], now: datetime) -> list[dict[str, Any]]:
+        max_bars = max(0, int(self.config.max_hold_bars))
+        bar_minutes = max(1, int(self.config.bar_minutes))
+        if max_bars <= 0:
+            return []
+        max_age = timedelta(minutes=max_bars * bar_minutes)
+        rows = state.get("open_positions", []) if isinstance(state.get("open_positions"), list) else []
+        if not rows:
+            return []
+        broker_available = not self.config.paper_trade and self.config.live_trading_enabled and self.config.has_oanda_credentials
+        kept: list[dict[str, Any]] = []
+        stopped: list[dict[str, Any]] = []
+        for row in rows:
+            opened_at_raw = row.get("opened_at")
+            try:
+                opened_at = datetime.fromisoformat(str(opened_at_raw)) if opened_at_raw else None
+            except ValueError:
+                opened_at = None
+            if opened_at is None:
+                kept.append(row)
+                continue
+            if opened_at.tzinfo is None:
+                opened_at = opened_at.replace(tzinfo=timezone.utc)
+            if (now - opened_at) < max_age:
+                kept.append(row)
+                continue
+            trade_id = str(row.get("order_id") or "")
+            if broker_available and trade_id:
+                try:
+                    self.client.close_trade(trade_id)
+                except RuntimeError as exc:
+                    log.warning("time_stop_close_failed instrument=%s order_id=%s error=%s", row.get("instrument"), trade_id, exc)
+                    kept.append(row)
+                    continue
+            stopped.append(row)
+            state.setdefault("events", []).append({
+                "type": "trade_closed",
+                "reason": "max_hold_time_stop",
+                "symbol": row.get("symbol"),
+                "instrument": row.get("instrument"),
+                "order_id": trade_id,
+                "age_minutes": int((now - opened_at).total_seconds() // 60),
+                "at": now.isoformat(),
+            })
+        state["open_positions"] = kept
+        return stopped
+
     def _apply_profit_protection(self, state: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         updates: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
-        if not self.config.profit_lock_enabled or self.config.paper_trade or not self.config.live_trading_enabled or not self.config.has_oanda_credentials:
+        if not self.config.profit_lock_enabled:
             state["last_profit_protection_updates"] = []
             return updates, errors
+        broker_available = not self.config.paper_trade and self.config.live_trading_enabled and self.config.has_oanda_credentials
         rows = state.get("open_positions", []) if isinstance(state.get("open_positions"), list) else []
         if not rows:
             state["last_profit_protection_updates"] = []
             return updates, errors
-        try:
-            trades = self.client.open_trades()
-        except RuntimeError as exc:
-            errors.append({"stage": "profit_lock_open_trades", "error": str(exc)})
-            state["last_profit_protection_errors"] = errors[:5]
-            return updates, errors
+        trades: list[dict[str, object]] = []
+        if broker_available:
+            try:
+                trades = self.client.open_trades()
+            except RuntimeError as exc:
+                errors.append({"stage": "profit_lock_open_trades", "error": str(exc)})
+                state["last_profit_protection_errors"] = errors[:5]
+                return updates, errors
         trades_by_id = {str(trade.get("id") or ""): trade for trade in trades if isinstance(trade, dict) and trade.get("id")}
         trades_by_instrument: dict[str, dict[str, object]] = {}
         for trade in trades:
@@ -209,12 +262,13 @@ class IndicesRuntime:
             if peak_pnl_pct < max(0.0, self.config.profit_lock_trigger_pct) or pullback_pct < max(0.0, self.config.profit_lock_pullback_pct) or pnl_pct <= 0.0:
                 kept_rows.append(row)
                 continue
-            try:
-                self.client.close_trade(trade_id)
-            except RuntimeError as exc:
-                errors.append({"symbol": row.get("symbol") or instrument, "instrument": instrument, "stage": "profit_lock_close", "error": str(exc)})
-                kept_rows.append(row)
-                continue
+            if broker_available:
+                try:
+                    self.client.close_trade(trade_id)
+                except RuntimeError as exc:
+                    errors.append({"symbol": row.get("symbol") or instrument, "instrument": instrument, "stage": "profit_lock_close", "error": str(exc)})
+                    kept_rows.append(row)
+                    continue
             row["pnl_pct"] = pnl_pct
             row["peak_pnl_pct"] = peak_pnl_pct
             row["pullback_from_peak_pct"] = pullback_pct
