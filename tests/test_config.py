@@ -11,6 +11,7 @@ def test_config_defaults_safe(monkeypatch) -> None:
     assert config.paper_trade is True
     assert config.live_trading_enabled is False
     assert "SPX500" in config.universe
+    assert config.oanda_instrument_for("DE40") == "DE30_EUR"
     assert config.enabled_strategies == ("TREND_PULLBACK", "OPENING_RANGE_BREAKOUT")
     assert config.require_calibration_for_trading is True
     assert config.startup_message_cooldown_minutes == 30

@@ -37,7 +37,7 @@ OANDA_INSTRUMENTS = {
     "NAS100": "NAS100_USD",
     "US30": "US30_USD",
     "UK100": "UK100_GBP",
-    "DE40": "DE40_EUR",
+    "DE40": "DE30_EUR",
     "EU50": "EU50_EUR",
     "FR40": "FR40_EUR",
     "JP225": "JP225_USD",

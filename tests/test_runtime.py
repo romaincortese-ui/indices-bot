@@ -60,6 +60,11 @@ class ProtectionClient:
         return {"orderFillTransaction": {"tradeClosed": {"tradeID": trade_id}}}
 
 
+class MarketDataErrorClient(Client):
+    def instrument_tradeable(self, instrument):
+        raise RuntimeError("OANDA request failed: {'errorMessage': 'Invalid Instrument BAD'}")
+
+
 class Telegram:
     enabled = False
 
@@ -106,6 +111,21 @@ def test_runtime_blocks_entries_without_calibration(tmp_path, monkeypatch) -> No
 
     assert state["last_scan"]["status"] == "blocked"
     assert state["last_scan"]["blocked_by"] == "calibration_missing"
+
+
+def test_runtime_skips_symbol_on_market_data_error(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("INDICES_STATE_FILE", str(tmp_path / "state.json"))
+    monkeypatch.setenv("INDICES_DAILY_REVIEW_FILE", str(tmp_path / "review.json"))
+    monkeypatch.setenv("INDICES_MACRO_STATE_FILE", str(tmp_path / "macro.json"))
+    monkeypatch.setenv("INDICES_REQUIRE_CALIBRATION", "false")
+    monkeypatch.setenv("INDICES_UNIVERSE", "SPX500")
+    config = IndicesConfig.from_env()
+    runtime = IndicesRuntime(config, client=MarketDataErrorClient(), telegram=Telegram())
+
+    state = runtime.run_cycle()
+
+    assert state["last_scan"]["status"] == "idle"
+    assert any("SPX500:market_data_error:" in reason for reason in state["last_scan"]["reasons"])
 
 
 def test_startup_message_is_deduplicated(tmp_path, monkeypatch) -> None:

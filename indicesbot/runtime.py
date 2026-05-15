@@ -142,14 +142,21 @@ class IndicesRuntime:
             if not instrument:
                 self._record_miss(state, symbol, "UNKNOWN", "UNKNOWN", "instrument_unavailable", 0.0)
                 continue
-            ok, tradeable_reason = self.client.instrument_tradeable(instrument)
-            if not ok:
-                self._record_miss(state, symbol, "UNKNOWN", "UNKNOWN", tradeable_reason, 0.0)
+            try:
+                ok, tradeable_reason = self.client.instrument_tradeable(instrument)
+                if not ok:
+                    self._record_miss(state, symbol, "UNKNOWN", "UNKNOWN", tradeable_reason, 0.0)
+                    continue
+                quote = self.client.current_quote(symbol, instrument)
+                candles_m15 = self.client.candles(instrument, count=120, granularity="M15")
+                candles_h1 = self.client.candles(instrument, count=120, granularity="H1")
+                candles_h4 = self.client.candles(instrument, count=120, granularity="H4") or candles_h1
+            except Exception as exc:
+                reason = f"market_data_error:{str(exc)[:160]}"
+                self._record_miss(state, symbol, "UNKNOWN", "UNKNOWN", reason, 0.0)
+                all_reasons.append(f"{symbol}:{reason}")
+                log.info("symbol_skipped symbol=%s instrument=%s reason=%s", symbol, instrument, reason)
                 continue
-            quote = self.client.current_quote(symbol, instrument)
-            candles_m15 = self.client.candles(instrument, count=120, granularity="M15")
-            candles_h1 = self.client.candles(instrument, count=120, granularity="H1")
-            candles_h4 = self.client.candles(instrument, count=120, granularity="H4") or candles_h1
             if not candles_m15 or not candles_h1:
                 self._record_miss(state, symbol, "UNKNOWN", "UNKNOWN", "candles_unavailable", 0.0)
                 continue
