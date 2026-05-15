@@ -134,6 +134,13 @@ class IndicesRuntime:
                 return state
 
         account = self.client.account_summary()
+        state["last_account"] = {
+            "balance": account.balance,
+            "nav": account.nav,
+            "margin_available": account.margin_available,
+            "margin_used": account.margin_used,
+            "currency": account.currency,
+        }
         log.info("oanda_account_summary_loaded currency=%s nav_positive=%s margin_available_positive=%s", account.currency, account.nav > 0, account.margin_available > 0)
         all_opportunities = []
         all_reasons: list[str] = []
@@ -418,7 +425,7 @@ class IndicesRuntime:
     def _save_status(self, state: dict[str, Any], status: str) -> None:
         self.state_store.save(state)
         write_daily_review(self.config.daily_review_file, state)
-        self.state_store.publish_status(self.config.bot_status_key, {"status": status, "updated_at": datetime.now(timezone.utc).isoformat(), "last_scan": state.get("last_scan", {})})
+        self.state_store.publish_status(self.config.bot_status_key, _runtime_status_payload(state, status))
 
 
 def all_candle_range(candles: list[Any]) -> float:
@@ -472,6 +479,61 @@ def _position_pnl_pct(row: dict[str, Any]) -> float | None:
     if entry_budget is None or entry_budget <= 0 or unrealized_pl is None:
         return None
     return unrealized_pl / entry_budget * 100.0
+
+
+def _runtime_open_metrics(rows: list[Any]) -> tuple[float, float, float, int]:
+    allocated = 0.0
+    pnl_amount = 0.0
+    pnl_base = 0.0
+    open_count = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        open_count += 1
+        entry_budget = _position_entry_budget(row)
+        if entry_budget is not None:
+            allocated += entry_budget
+            pnl_base += entry_budget
+        unrealized_pl = _position_unrealized_pl(row)
+        if unrealized_pl is not None:
+            pnl_amount += unrealized_pl
+    pnl_pct = pnl_amount / pnl_base * 100.0 if pnl_base > 0 else 0.0
+    return allocated, pnl_amount, pnl_pct, open_count
+
+
+def _runtime_status_payload(state: dict[str, Any], status: str) -> dict[str, Any]:
+    now = datetime.now(timezone.utc).isoformat()
+    rows = state.get("open_positions", []) if isinstance(state.get("open_positions"), list) else []
+    allocated, pnl_amount, pnl_pct, open_count = _runtime_open_metrics(rows)
+    account = state.get("last_account") if isinstance(state.get("last_account"), dict) else {}
+    nav = _float_or_none(account.get("nav"))
+    balance = _float_or_none(account.get("balance"))
+    margin_available = _float_or_none(account.get("margin_available"))
+    margin_used = _float_or_none(account.get("margin_used"))
+    if margin_used is not None:
+        allocated = margin_used
+    total_closed = len([event for event in state.get("events", []) if isinstance(event, dict) and event.get("type") == "trade_closed"])
+    return {
+        "service": "indices",
+        "state": status,
+        "status": status,
+        "generated_at": now,
+        "updated_at": now,
+        "account_balance": nav if nav is not None else balance,
+        "account_nav": nav,
+        "balance": balance,
+        "available_balance": margin_available,
+        "allocated_balance": allocated,
+        "margin_used": margin_used,
+        "unrealized_pl": pnl_amount,
+        "pnl_amount": pnl_amount,
+        "pnl_pct": pnl_pct,
+        "open_trades": open_count,
+        "total_trades": total_closed + open_count,
+        "profit_factor": None,
+        "open_positions": rows,
+        "last_scan": state.get("last_scan", {}),
+    }
 
 
 def _open_positions_message(state: dict[str, Any]) -> str:
