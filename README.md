@@ -55,7 +55,11 @@ Safe defaults:
 EXECUTION_MODE=paper
 PAPER_TRADE=true
 LIVE_TRADING_ENABLED=false
+INDICES_ENABLED_STRATEGIES=TREND_PULLBACK,OPENING_RANGE_BREAKOUT
+INDICES_REQUIRE_CALIBRATION=true
 ```
+
+`MEAN_REVERSION` and `EVENT_MOMENTUM` remain available in code, but they are disabled by default until they pass walk-forward validation on OANDA practice data. Paper/live entries also require a calibration payload with enough sample trades.
 
 For live trading, all three must be set deliberately:
 
@@ -129,6 +133,8 @@ Run calibration/backtest:
 indices-bot calibrate
 ```
 
+Paper and live workers require a usable calibration file by default. Run calibration first, or set `INDICES_REQUIRE_CALIBRATION=false` only for diagnostic signal checks.
+
 Run a 30-day online-data backtest:
 
 ```powershell
@@ -136,7 +142,7 @@ $env:BACKTEST_OUTPUT_DIR="backtest_output\online_30d"
 python -m indicesbot.backtest.run_backtest --days 30 --data-source online --granularity M15
 ```
 
-`--data-source online` uses OANDA candles when OANDA credentials are configured and otherwise falls back to public Yahoo Finance index candles. The default `indices-bot calibrate` path remains synthetic so tests and local smoke runs do not require network access.
+`--data-source online` uses OANDA candles when OANDA credentials are configured and otherwise falls back to public Yahoo Finance index candles. The default `indices-bot calibrate` path remains synthetic so tests and local smoke runs do not require network access; it is not enough for paper/live entries under the default calibration gate.
 
 Run a calibrated 30-day online backtest after the latest market-data pull:
 
@@ -156,6 +162,7 @@ Use one repo with three services or commands:
 - calibration: `indices-bot calibrate`
 
 Start in paper mode with OANDA practice credentials. Move to live only after Telegram, instrument discovery, unit precision, stop-loss placement, and order alerts are verified.
+Run the calibration service before starting the worker, or keep the worker in `signal_only` until calibration is present.
 
 ## Tests
 

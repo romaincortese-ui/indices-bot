@@ -93,6 +93,21 @@ def test_runtime_run_once_opens_paper_trade(tmp_path, monkeypatch) -> None:
     assert (tmp_path / "review.json").exists()
 
 
+def test_runtime_blocks_entries_without_calibration(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("INDICES_STATE_FILE", str(tmp_path / "state.json"))
+    monkeypatch.setenv("INDICES_DAILY_REVIEW_FILE", str(tmp_path / "review.json"))
+    monkeypatch.setenv("INDICES_MACRO_STATE_FILE", str(tmp_path / "macro.json"))
+    monkeypatch.setenv("INDICES_CALIBRATION_FILE", str(tmp_path / "missing_calibration.json"))
+    monkeypatch.setenv("INDICES_UNIVERSE", "SPX500")
+    config = IndicesConfig.from_env()
+    runtime = IndicesRuntime(config, client=Client(), telegram=Telegram())
+
+    state = runtime.run_cycle()
+
+    assert state["last_scan"]["status"] == "blocked"
+    assert state["last_scan"]["blocked_by"] == "calibration_missing"
+
+
 def _live_config(tmp_path, monkeypatch) -> IndicesConfig:
     monkeypatch.setenv("INDICES_STATE_FILE", str(tmp_path / "state.json"))
     monkeypatch.setenv("INDICES_DAILY_REVIEW_FILE", str(tmp_path / "review.json"))

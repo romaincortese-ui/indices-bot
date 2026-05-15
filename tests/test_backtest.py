@@ -22,3 +22,5 @@ def test_backtest_writes_artifacts(tmp_path, monkeypatch) -> None:
     assert summary["calibration_source"] == "none"
     if summary["trades"]:
         assert "exit_reason" in summary["trades"][0]
+        assert "r_multiple" in summary["trades"][0]
+        assert "risk_amount" in summary["trades"][0]

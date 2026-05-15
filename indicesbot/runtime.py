@@ -6,7 +6,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from indicesbot.calibration import load_calibration, strategy_adjustment
+from indicesbot.calibration import calibration_quality, load_calibration, strategy_adjustment
 from indicesbot.config import IndicesConfig, load_config
 from indicesbot.daily_review import write_daily_review
 from indicesbot.news import high_impact_event_block, load_macro_state, parse_events
@@ -62,10 +62,21 @@ class IndicesRuntime:
             self._save_status(state, "paused")
             return state
 
-        account = self.client.account_summary()
         macro_state = load_macro_state(self.config.macro_state_file)
         events = parse_events(macro_state)
         calibration = load_calibration(self.config.calibration_file)
+        if self.config.require_calibration_for_trading and self.config.execution_mode in {"paper", "live"}:
+            ready, reason = calibration_quality(
+                calibration,
+                min_trades=self.config.calibration_min_trades,
+                min_groups=self.config.calibration_min_groups,
+            )
+            if not ready:
+                state["last_scan"] = {"status": "blocked", "blocked_by": reason, "at": now.isoformat()}
+                self._save_status(state, "blocked")
+                return state
+
+        account = self.client.account_summary()
         all_opportunities = []
         all_reasons: list[str] = []
         for symbol in self.config.universe:

@@ -17,6 +17,7 @@ if load_dotenv is not None and find_dotenv is not None:
         load_dotenv(dotenv_path, override=False)
 
 DEFAULT_UNIVERSE = ("SPX500", "NAS100", "US30", "UK100", "DE40", "EU50", "FR40", "JP225", "HK33", "AU200")
+DEFAULT_ENABLED_STRATEGIES = ("TREND_PULLBACK", "OPENING_RANGE_BREAKOUT")
 
 REGION_BUCKETS = {
     "SPX500": "US",
@@ -126,6 +127,10 @@ class IndicesConfig:
     min_score: float
     max_hold_bars: int
     bar_minutes: int
+    enabled_strategies: tuple[str, ...]
+    require_calibration_for_trading: bool
+    calibration_min_trades: int
+    calibration_min_groups: int
     profit_lock_enabled: bool
     profit_lock_trigger_pct: float
     profit_lock_pullback_pct: float
@@ -193,6 +198,10 @@ class IndicesConfig:
             min_score=env_float("INDICES_MIN_SCORE", 78.0),
             max_hold_bars=env_int("INDICES_MAX_HOLD_BARS", 12),
             bar_minutes=env_int("INDICES_BAR_MINUTES", 15),
+            enabled_strategies=env_csv("INDICES_ENABLED_STRATEGIES", DEFAULT_ENABLED_STRATEGIES),
+            require_calibration_for_trading=env_bool("INDICES_REQUIRE_CALIBRATION", True),
+            calibration_min_trades=env_int("INDICES_CALIBRATION_MIN_TRADES", 30),
+            calibration_min_groups=env_int("INDICES_CALIBRATION_MIN_GROUPS", 1),
             daily_loss_halt_pct=env_float("DAILY_LOSS_HALT_PCT", 0.015),
             rolling_dd_throttle_pct=env_float("ROLLING_DD_THROTTLE_PCT", 0.05),
             rolling_dd_halt_pct=env_float("ROLLING_DD_HALT_PCT", 0.10),

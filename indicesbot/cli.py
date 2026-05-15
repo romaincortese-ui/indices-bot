@@ -40,7 +40,16 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(write_daily_review(config.daily_review_file, state), indent=2))
         return 0
     if command == "validate-config":
-        print(json.dumps({"execution_mode": config.execution_mode, "paper_trade": config.paper_trade, "universe": config.universe, "telegram_configured": bool(config.telegram_token and config.telegram_chat_id), "oanda_configured": config.has_oanda_credentials}, indent=2))
+        print(json.dumps({
+            "execution_mode": config.execution_mode,
+            "paper_trade": config.paper_trade,
+            "universe": config.universe,
+            "enabled_strategies": config.enabled_strategies,
+            "require_calibration_for_trading": config.require_calibration_for_trading,
+            "calibration_min_trades": config.calibration_min_trades,
+            "telegram_configured": bool(config.telegram_token and config.telegram_chat_id),
+            "oanda_configured": config.has_oanda_credentials,
+        }, indent=2))
         return 0
     parser.print_help()
     return 1

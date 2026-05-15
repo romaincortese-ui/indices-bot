@@ -37,6 +37,20 @@ def strategy_adjustment(calibration: dict[str, Any] | None, *, symbol: str, stra
     return 0.0, 1.0
 
 
+def calibration_quality(calibration: dict[str, Any] | None, *, min_trades: int = 30, min_groups: int = 1) -> tuple[bool, str]:
+    if not calibration:
+        return False, "calibration_missing"
+    total_trades = int(calibration.get("total_trades", 0) or 0)
+    required_trades = max(0, min_trades)
+    if total_trades < required_trades:
+        return False, f"calibration_trades_below_min:{total_trades}<{required_trades}"
+    groups = calibration.get("groups", {}) if isinstance(calibration.get("groups"), dict) else {}
+    required_groups = max(0, min_groups)
+    if len(groups) < required_groups:
+        return False, f"calibration_groups_below_min:{len(groups)}<{required_groups}"
+    return True, "ok"
+
+
 def write_calibration(path: Path, summary: dict[str, Any]) -> dict[str, Any]:
     payload = {"schema_version": "1.0", "generated_at": datetime.now(timezone.utc).isoformat(), **summary}
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")

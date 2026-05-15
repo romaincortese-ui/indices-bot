@@ -17,7 +17,17 @@ def apply_regime(opportunity: Opportunity, regime: MarketRegime) -> Opportunity:
 
 def evaluate_all(config: IndicesConfig, symbol: str, instrument: str, quote: IndexQuote, candles_m15: list[Candle], candles_h1: list[Candle], candles_h4: list[Candle], regime: MarketRegime, macro_state: dict, reasons: list[str]) -> list[Opportunity]:
     opportunities: list[Opportunity] = []
-    for scorer in (score_opening_range_breakout, score_trend_pullback, score_mean_reversion, score_event_momentum):
+    enabled = {strategy.upper() for strategy in getattr(config, "enabled_strategies", ())}
+    scorers = (
+        ("OPENING_RANGE_BREAKOUT", score_opening_range_breakout),
+        ("TREND_PULLBACK", score_trend_pullback),
+        ("MEAN_REVERSION", score_mean_reversion),
+        ("EVENT_MOMENTUM", score_event_momentum),
+    )
+    for strategy_name, scorer in scorers:
+        if enabled and strategy_name not in enabled:
+            reasons.append(f"{strategy_name}:disabled")
+            continue
         for direction in ("LONG", "SHORT"):
             opportunity = scorer(config, symbol, instrument, direction, quote, candles_m15, candles_h1, candles_h4, regime, macro_state, reasons)
             if opportunity is not None:

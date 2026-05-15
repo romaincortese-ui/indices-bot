@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from indicesbot.config import IndicesConfig
 from indicesbot.models import Candle, IndexQuote, MarketRegime
 from indicesbot.strategies.event_momentum import score_event_momentum
+from indicesbot.strategies import evaluate_all
 from indicesbot.strategies.opening_range_breakout import score_opening_range_breakout
 
 
@@ -46,3 +47,16 @@ def test_event_momentum_requires_event_score() -> None:
 
     assert opportunity is not None
     assert opportunity.strategy == "EVENT_MOMENTUM"
+
+
+def test_default_strategy_allow_list_excludes_event_momentum() -> None:
+    config = IndicesConfig.from_env()
+    quote = IndexQuote("SPX500", "SPX500_USD", 109, 109.1, 109.05, 0.1, True, "tradeable", datetime.now(timezone.utc))
+    regime = MarketRegime("SPX500", "US", "BULL", "NORMAL", "RISK_ON", "US_CASH_OPEN")
+    macro = {"event_scores": [{"region": "US", "score": 0.7}]}
+    reasons: list[str] = []
+
+    opportunities = evaluate_all(config, "SPX500", "SPX500_USD", quote, _candles("UP"), _candles("UP"), _candles("UP"), regime, macro, reasons)
+
+    assert all(item.strategy != "EVENT_MOMENTUM" for item in opportunities)
+    assert "EVENT_MOMENTUM:disabled" in reasons

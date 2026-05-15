@@ -11,6 +11,8 @@ def test_config_defaults_safe(monkeypatch) -> None:
     assert config.paper_trade is True
     assert config.live_trading_enabled is False
     assert "SPX500" in config.universe
+    assert config.enabled_strategies == ("TREND_PULLBACK", "OPENING_RANGE_BREAKOUT")
+    assert config.require_calibration_for_trading is True
 
 
 def test_invalid_bool_raises(monkeypatch) -> None:
@@ -29,3 +31,11 @@ def test_live_requires_credentials_and_telegram(monkeypatch) -> None:
     config = IndicesConfig.from_env()
     with pytest.raises(RuntimeError):
         config.validate_for_live()
+
+
+def test_enabled_strategies_env(monkeypatch) -> None:
+    monkeypatch.setenv("INDICES_ENABLED_STRATEGIES", "trend_pullback event_momentum")
+
+    config = IndicesConfig.from_env()
+
+    assert config.enabled_strategies == ("TREND_PULLBACK", "EVENT_MOMENTUM")

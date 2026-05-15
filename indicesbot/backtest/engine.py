@@ -32,11 +32,28 @@ def run_backtest(config: IndicesConfig, candles_by_symbol: dict[str, list], macr
             if best is None:
                 continue
             exit_price, exit_reason, held_bars = _simulate_exit(candles, index, best, max_hold_bars=max_hold_bars)
-            pnl = (exit_price - best.entry_price) if best.direction == "LONG" else (best.entry_price - exit_price)
+            pnl_points = (exit_price - best.entry_price) if best.direction == "LONG" else (best.entry_price - exit_price)
+            stop_distance = max(abs(best.entry_price - best.stop_price), 0.0001)
+            r_multiple = pnl_points / stop_distance
+            risk_amount = equity * config.budget_allocation * config.max_risk_per_trade * best.risk_multiplier
+            pnl = risk_amount * r_multiple
             equity += pnl
             peak_equity = max(peak_equity, equity)
             max_drawdown = max(max_drawdown, (peak_equity - equity) / peak_equity if peak_equity else 0.0)
-            trades.append({"symbol": symbol, "direction": best.direction, "strategy": best.strategy, "entry": best.entry_price, "exit": exit_price, "pnl": pnl, "exit_reason": exit_reason, "held_bars": held_bars, "opened_at": best.metadata.get("time", window[-1].time.isoformat())})
+            trades.append({
+                "symbol": symbol,
+                "direction": best.direction,
+                "strategy": best.strategy,
+                "entry": best.entry_price,
+                "exit": exit_price,
+                "pnl": pnl,
+                "pnl_points": pnl_points,
+                "risk_amount": risk_amount,
+                "r_multiple": r_multiple,
+                "exit_reason": exit_reason,
+                "held_bars": held_bars,
+                "opened_at": best.metadata.get("time", window[-1].time.isoformat()),
+            })
     wins = [trade for trade in trades if trade["pnl"] > 0]
     losses = [trade for trade in trades if trade["pnl"] < 0]
     gross_win = sum(trade["pnl"] for trade in wins)
