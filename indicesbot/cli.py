@@ -47,6 +47,7 @@ def main(argv: list[str] | None = None) -> int:
             "enabled_strategies": config.enabled_strategies,
             "require_calibration_for_trading": config.require_calibration_for_trading,
             "calibration_min_trades": config.calibration_min_trades,
+            "startup_message_cooldown_minutes": config.startup_message_cooldown_minutes,
             "telegram_configured": bool(config.telegram_token and config.telegram_chat_id),
             "oanda_configured": config.has_oanda_credentials,
         }, indent=2))

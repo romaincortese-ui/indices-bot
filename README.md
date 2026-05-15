@@ -73,7 +73,7 @@ Live mode refuses to start unless OANDA and Telegram are configured.
 
 ## Telegram Messages
 
-Messages are intentionally plain and operator-focused. The bot sends clean alerts for:
+Messages are emoji-labelled and operator-focused, matching the commodities bot style. The bot sends clean alerts for:
 
 - startup
 - signal-only opportunities
@@ -82,6 +82,8 @@ Messages are intentionally plain and operator-focused. The bot sends clean alert
 - detected closures
 - pause/resume actions
 - runtime status
+
+Startup alerts are de-duplicated across quick Railway restarts using `INDICES_STARTUP_MESSAGE_COOLDOWN_MINUTES` so a crash/restart loop does not flood Telegram with identical boot messages.
 
 Supported commands:
 

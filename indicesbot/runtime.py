@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from html import escape
 from typing import Any
 
 from indicesbot.calibration import calibration_quality, load_calibration, strategy_adjustment
@@ -35,12 +37,42 @@ class IndicesRuntime:
         state.setdefault("open_positions", [])
         state.setdefault("events", [])
         self.state_store.save(state)
-        self.telegram.send(startup_message(mode=self.config.execution_mode, universe=self.config.universe, account_label=self.config.oanda_env))
+        self._announce_startup(state)
         while True:
             self.run_cycle()
             if self.config.run_once:
                 return
             time.sleep(self.config.scan_interval_seconds)
+
+    def _announce_startup(self, state: dict[str, Any]) -> None:
+        now = datetime.now(timezone.utc)
+        key = self._startup_message_key()
+        last_key = str(state.get("last_startup_telegram_key") or "")
+        last_at = _parse_datetime(state.get("last_startup_telegram_at"))
+        cooldown = timedelta(minutes=max(0, self.config.startup_message_cooldown_minutes))
+        if cooldown.total_seconds() > 0 and last_key == key and last_at is not None and now - last_at < cooldown:
+            log.info("startup_telegram_suppressed cooldown_minutes=%s", self.config.startup_message_cooldown_minutes)
+            return
+        self.telegram.send(startup_message(
+            mode=self.config.execution_mode,
+            universe=self.config.universe,
+            account_label=self.config.oanda_env,
+            calibration_required=self.config.require_calibration_for_trading,
+        ))
+        state["last_startup_telegram_at"] = now.isoformat()
+        state["last_startup_telegram_key"] = key
+        self.state_store.save(state)
+
+    def _startup_message_key(self) -> str:
+        deployment = os.getenv("RAILWAY_DEPLOYMENT_ID", "").strip() or os.getenv("RAILWAY_GIT_COMMIT_SHA", "").strip()
+        return "|".join([
+            deployment,
+            self.config.execution_mode,
+            self.config.oanda_env,
+            ",".join(self.config.universe),
+            ",".join(self.config.enabled_strategies),
+            str(self.config.require_calibration_for_trading),
+        ])
 
     def run_cycle(self) -> dict[str, Any]:
         now = datetime.now(timezone.utc)
@@ -410,16 +442,23 @@ def _position_pnl_pct(row: dict[str, Any]) -> float | None:
 def _open_positions_message(state: dict[str, Any]) -> str:
     rows = state.get("open_positions", []) if isinstance(state.get("open_positions"), list) else []
     if not rows:
-        return "No open index positions are tracked right now."
-    lines = ["Open Indices Positions", "Tracked in runtime state."]
+        return "📂 <b>Open Index Positions</b>\n━━━━━━━━━━━━━━━\nNo open index positions are tracked right now."
+    lines = ["📂 <b>Open Index Positions</b>", "━━━━━━━━━━━━━━━", "Tracked in runtime state."]
     for row in rows[:10]:
         if not isinstance(row, dict):
             continue
         target = row.get("take_profit_price") or "managed exit"
+        direction_value = str(row.get("direction", "")).upper()
+        if direction_value == "LONG":
+            direction = "🟢 LONG"
+        elif direction_value == "SHORT":
+            direction = "🔴 SHORT"
+        else:
+            direction = "⚪ UNKNOWN"
         lines.append("")
-        lines.append(f"{row.get('symbol', '?')} {row.get('direction', '?')} | {row.get('strategy', '?')}")
-        lines.append(f"Instrument: {row.get('instrument', '?')} | Units: {row.get('units', '?')} | Order ID: {row.get('order_id', '?')}")
-        lines.append(f"Entry: {row.get('entry_price', '?')} | Stop: {row.get('stop_price', '?')} | Target: {target}")
+        lines.append(f"{direction} <b>{escape(str(row.get('symbol', '?')))}</b> | {escape(str(row.get('strategy', '?')).replace('_', ' ').title())}")
+        lines.append(f"Instrument: {escape(str(row.get('instrument', '?')))} | Units: {escape(str(row.get('units', '?')))} | Order ID: {escape(str(row.get('order_id', '?')))}")
+        lines.append(f"Entry: {escape(str(row.get('entry_price', '?')))} | Stop: {escape(str(row.get('stop_price', '?')))} | Target: {escape(str(target))}")
     if len(rows) > 10:
         lines.append(f"+{len(rows) - 10} more")
     return "\n".join(lines)
@@ -428,10 +467,22 @@ def _open_positions_message(state: dict[str, Any]) -> str:
 def _events_message(macro_state: dict[str, Any]) -> str:
     events = macro_state.get("events", []) if isinstance(macro_state.get("events"), list) else []
     if not events:
-        return "No high-impact index events are currently cached."
-    lines = ["Cached Index Events"]
+        return "🗂️ <b>Cached Index Events</b>\n━━━━━━━━━━━━━━━\nNo high-impact index events are currently cached."
+    lines = ["🗂️ <b>Cached Index Events</b>", "━━━━━━━━━━━━━━━"]
     for event in events[:8]:
         if isinstance(event, dict):
-            lines.append(f"{event.get('region', 'GLOBAL')} {event.get('impact', '')}: {event.get('title')}")
-            lines.append(f"At: {event.get('occurs_at')}")
+            lines.append(f"⚠️ {escape(str(event.get('region', 'GLOBAL')))} {escape(str(event.get('impact', '')))}: {escape(str(event.get('title', 'n/a')))}")
+            lines.append(f"At: {escape(str(event.get('occurs_at', 'n/a')))}")
     return "\n".join(lines)
+
+
+def _parse_datetime(value: object) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)

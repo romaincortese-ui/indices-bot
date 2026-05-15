@@ -108,6 +108,28 @@ def test_runtime_blocks_entries_without_calibration(tmp_path, monkeypatch) -> No
     assert state["last_scan"]["blocked_by"] == "calibration_missing"
 
 
+def test_startup_message_is_deduplicated(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("INDICES_STATE_FILE", str(tmp_path / "state.json"))
+    monkeypatch.setenv("INDICES_DAILY_REVIEW_FILE", str(tmp_path / "review.json"))
+    monkeypatch.setenv("INDICES_MACRO_STATE_FILE", str(tmp_path / "macro.json"))
+    monkeypatch.setenv("INDICES_STARTUP_MESSAGE_COOLDOWN_MINUTES", "30")
+    config = IndicesConfig.from_env()
+    telegram = Telegram()
+    runtime = IndicesRuntime(config, client=Client(), telegram=telegram)
+    state = runtime.state_store.load()
+
+    runtime._announce_startup(state)
+    runtime._announce_startup(runtime.state_store.load())
+
+    assert len(telegram.messages) == 1
+    assert "🚀 <b>Indices Bot Online</b>" in telegram.messages[0]
+    saved = runtime.state_store.load()
+    saved["last_startup_telegram_at"] = "2026-01-01T00:00:00+00:00"
+    runtime._announce_startup(saved)
+
+    assert len(telegram.messages) == 2
+
+
 def _live_config(tmp_path, monkeypatch) -> IndicesConfig:
     monkeypatch.setenv("INDICES_STATE_FILE", str(tmp_path / "state.json"))
     monkeypatch.setenv("INDICES_DAILY_REVIEW_FILE", str(tmp_path / "review.json"))

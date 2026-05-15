@@ -105,6 +105,7 @@ class IndicesConfig:
     telegram_poll_seconds: int
     telegram_heartbeat_minutes: int
     telegram_offset_file: Path
+    startup_message_cooldown_minutes: int
     redis_url: str
     runtime_state_key: str
     bot_status_key: str
@@ -179,6 +180,7 @@ class IndicesConfig:
             telegram_poll_seconds=max(1, env_int("INDICES_TELEGRAM_POLL_SECONDS", 5)),
             telegram_heartbeat_minutes=max(0, env_int("INDICES_TELEGRAM_HEARTBEAT_MINUTES", 360)),
             telegram_offset_file=Path(env_str("INDICES_TELEGRAM_OFFSET_FILE", "telegram_state.json")),
+            startup_message_cooldown_minutes=max(0, env_int("INDICES_STARTUP_MESSAGE_COOLDOWN_MINUTES", 30)),
             redis_url=env_str("REDIS_URL"),
             runtime_state_key=env_str("INDICES_RUNTIME_STATE_KEY", "indices_runtime_state"),
             bot_status_key=env_str("INDICES_BOT_STATUS_KEY", "indices_bot_runtime_status"),

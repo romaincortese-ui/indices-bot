@@ -13,6 +13,7 @@ def test_config_defaults_safe(monkeypatch) -> None:
     assert "SPX500" in config.universe
     assert config.enabled_strategies == ("TREND_PULLBACK", "OPENING_RANGE_BREAKOUT")
     assert config.require_calibration_for_trading is True
+    assert config.startup_message_cooldown_minutes == 30
 
 
 def test_invalid_bool_raises(monkeypatch) -> None:
