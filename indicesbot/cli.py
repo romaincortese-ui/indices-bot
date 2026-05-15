@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 
 from indicesbot.backtest.run_backtest import main as backtest_main
 from indicesbot.config import load_config
@@ -9,6 +10,10 @@ from indicesbot.daily_review import write_daily_review
 from indicesbot.macro_state import refresh_macro_state
 from indicesbot.runtime import IndicesRuntime
 from indicesbot.state import StateStore
+
+
+def configure_logging() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-5s %(message)s")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -23,6 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    configure_logging()
     parser = build_parser()
     args = parser.parse_args(argv)
     command = args.command or "run"

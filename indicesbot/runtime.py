@@ -37,12 +37,35 @@ class IndicesRuntime:
         state.setdefault("open_positions", [])
         state.setdefault("events", [])
         self.state_store.save(state)
+        log.info(
+            "indices_bot_starting mode=%s oanda_env=%s universe=%d enabled_strategies=%s calibration_required=%s scan_interval_seconds=%d",
+            self.config.execution_mode,
+            self.config.oanda_env,
+            len(self.config.universe),
+            ",".join(self.config.enabled_strategies),
+            self.config.require_calibration_for_trading,
+            self.config.scan_interval_seconds,
+        )
+        self._log_startup_health()
         self._announce_startup(state)
         while True:
             self.run_cycle()
             if self.config.run_once:
                 return
             time.sleep(self.config.scan_interval_seconds)
+
+    def _log_startup_health(self) -> None:
+        if not self.config.has_oanda_credentials:
+            log.info("oanda_account_check skipped reason=credentials_missing")
+            return
+        account = self.client.account_summary()
+        log.info(
+            "oanda_account_check ok env=%s currency=%s nav_positive=%s margin_available_positive=%s",
+            self.config.oanda_env,
+            account.currency,
+            account.nav > 0,
+            account.margin_available > 0,
+        )
 
     def _announce_startup(self, state: dict[str, Any]) -> None:
         now = datetime.now(timezone.utc)
@@ -77,6 +100,7 @@ class IndicesRuntime:
     def run_cycle(self) -> dict[str, Any]:
         now = datetime.now(timezone.utc)
         state = self.state_store.load()
+        log.info("scan_started at=%s", now.isoformat())
         self._service_telegram(state)
         closed = self._sync_closed_positions(state)
         for row in closed:
@@ -106,9 +130,11 @@ class IndicesRuntime:
             if not ready:
                 state["last_scan"] = {"status": "blocked", "blocked_by": reason, "at": now.isoformat()}
                 self._save_status(state, "blocked")
+                log.info("scan_blocked reason=%s mode=%s", reason, self.config.execution_mode)
                 return state
 
         account = self.client.account_summary()
+        log.info("oanda_account_summary_loaded currency=%s nav_positive=%s margin_available_positive=%s", account.currency, account.nav > 0, account.margin_available > 0)
         all_opportunities = []
         all_reasons: list[str] = []
         for symbol in self.config.universe:
@@ -151,6 +177,7 @@ class IndicesRuntime:
         if best is None:
             state["last_scan"] = {"status": "idle", "blocked_by": "score_below_threshold", "reasons": all_reasons[-25:], "at": now.isoformat()}
             self._save_status(state, "idle")
+            log.info("scan_idle reason=score_below_threshold opportunities=%d", len(all_opportunities))
             return state
         if self.config.execution_mode == "signal_only":
             state["last_scan"] = {"status": "signal_only", "best_opportunity": best.symbol, "at": now.isoformat()}
@@ -164,6 +191,7 @@ class IndicesRuntime:
             self._record_miss(state, best.symbol, best.direction, best.strategy, reason, best.score)
             state["last_scan"] = {"status": "blocked", "blocked_by": reason, "best_opportunity": best.symbol, "at": now.isoformat()}
             self._save_status(state, "blocked")
+            log.info("scan_blocked reason=%s best_symbol=%s best_strategy=%s score=%.2f", reason, best.symbol, best.strategy, best.score)
             return state
         try:
             response = self.client.place_market_order(best, position.order_units)
