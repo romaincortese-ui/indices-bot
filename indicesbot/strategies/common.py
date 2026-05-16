@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
 
 from indicesbot.config import IndicesConfig
@@ -35,8 +36,18 @@ def evaluate_all(config: IndicesConfig, symbol: str, instrument: str, quote: Ind
     return opportunities
 
 
-def select_best_opportunity(opportunities: list[Opportunity], *, min_score: float = 70.0) -> Opportunity | None:
-    tradable = [item for item in opportunities if item.score >= min_score]
+def select_best_opportunities(opportunities: list[Opportunity], *, min_score: float = 70.0, limit: int | None = None, score_threshold: Callable[[Opportunity], float] | None = None) -> list[Opportunity]:
+    tradable = []
+    for item in opportunities:
+        threshold = score_threshold(item) if score_threshold is not None else min_score
+        if item.score >= threshold:
+            tradable.append(item)
     if not tradable:
-        return None
-    return sorted(tradable, key=lambda item: (item.score, item.risk_reward, -item.metadata.get("spread_atr", 99.0)), reverse=True)[0]
+        return []
+    ranked = sorted(tradable, key=lambda item: (item.score, item.risk_reward, -item.metadata.get("spread_atr", 99.0)), reverse=True)
+    return ranked if limit is None else ranked[:limit]
+
+
+def select_best_opportunity(opportunities: list[Opportunity], *, min_score: float = 70.0, score_threshold: Callable[[Opportunity], float] | None = None) -> Opportunity | None:
+    selected = select_best_opportunities(opportunities, min_score=min_score, limit=1, score_threshold=score_threshold)
+    return selected[0] if selected else None

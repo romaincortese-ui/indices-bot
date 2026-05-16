@@ -122,6 +122,8 @@ class IndicesConfig:
     max_live_orders_per_scan: int
     max_margin_per_entry_pct: float
     min_margin_per_entry_pct: float
+    min_unit_floor_enabled: bool
+    min_unit_floor_max_risk_nav_pct: float
     daily_loss_halt_pct: float
     rolling_dd_throttle_pct: float
     rolling_dd_halt_pct: float
@@ -147,6 +149,18 @@ class IndicesConfig:
     post_event_settle_minutes: int
     high_impact_window_minutes: int
     risk_off_filter_enabled: bool
+    risk_on_enabled_strategies: tuple[str, ...]
+    risk_off_aggressive_enabled: bool
+    risk_off_aggressive_enabled_strategies: tuple[str, ...]
+    risk_off_aggressive_min_score: float
+    risk_off_aggressive_short_score_bonus: float
+    risk_off_aggressive_long_score_penalty: float
+    risk_off_aggressive_risk_multiplier: float
+    risk_off_aggressive_max_entry_spread_atr: float
+    risk_off_aggressive_profit_lock_trigger_pct: float
+    risk_off_aggressive_profit_lock_pullback_pct: float
+    risk_off_aggressive_vix_level: float
+    risk_off_aggressive_vix_change_pct: float
     backtest_days: int
     backtest_granularity: str
     backtest_initial_balance: float
@@ -197,6 +211,8 @@ class IndicesConfig:
             max_live_orders_per_scan=env_int("MAX_LIVE_ORDERS_PER_SCAN", 1),
             max_margin_per_entry_pct=env_float("MAX_MARGIN_PER_ENTRY_PCT", 0.08),
             min_margin_per_entry_pct=env_float("MIN_MARGIN_PER_ENTRY_PCT", 0.02),
+            min_unit_floor_enabled=env_bool("INDICES_MIN_UNIT_FLOOR_ENABLED", False),
+            min_unit_floor_max_risk_nav_pct=env_float("INDICES_MIN_UNIT_FLOOR_MAX_RISK_NAV_PCT", 0.001),
             min_score=env_float("INDICES_MIN_SCORE", 78.0),
             max_hold_bars=env_int("INDICES_MAX_HOLD_BARS", 12),
             bar_minutes=env_int("INDICES_BAR_MINUTES", 15),
@@ -222,6 +238,18 @@ class IndicesConfig:
             post_event_settle_minutes=env_int("POST_EVENT_SETTLE_MINUTES", 15),
             high_impact_window_minutes=env_int("HIGH_IMPACT_WINDOW_MINUTES", 180),
             risk_off_filter_enabled=env_bool("RISK_OFF_FILTER_ENABLED", True),
+            risk_on_enabled_strategies=env_csv("RISK_ON_ENABLED_STRATEGIES", ("OPENING_RANGE_BREAKOUT",)),
+            risk_off_aggressive_enabled=env_bool("RISK_OFF_AGGRESSIVE_ENABLED", False),
+            risk_off_aggressive_enabled_strategies=env_csv("RISK_OFF_AGGRESSIVE_ENABLED_STRATEGIES", ("EVENT_MOMENTUM", "OPENING_RANGE_BREAKOUT")),
+            risk_off_aggressive_min_score=env_float("RISK_OFF_AGGRESSIVE_MIN_SCORE", 73.0),
+            risk_off_aggressive_short_score_bonus=env_float("RISK_OFF_AGGRESSIVE_SHORT_SCORE_BONUS", 4.0),
+            risk_off_aggressive_long_score_penalty=env_float("RISK_OFF_AGGRESSIVE_LONG_SCORE_PENALTY", 6.0),
+            risk_off_aggressive_risk_multiplier=env_float("RISK_OFF_AGGRESSIVE_RISK_MULTIPLIER", 1.5),
+            risk_off_aggressive_max_entry_spread_atr=env_float("RISK_OFF_AGGRESSIVE_MAX_ENTRY_SPREAD_ATR", 0.14),
+            risk_off_aggressive_profit_lock_trigger_pct=env_float("RISK_OFF_AGGRESSIVE_PROFIT_LOCK_TRIGGER_PCT", 6.0),
+            risk_off_aggressive_profit_lock_pullback_pct=env_float("RISK_OFF_AGGRESSIVE_PROFIT_LOCK_PULLBACK_PCT", 1.8),
+            risk_off_aggressive_vix_level=env_float("RISK_OFF_AGGRESSIVE_VIX_LEVEL", 25.0),
+            risk_off_aggressive_vix_change_pct=env_float("RISK_OFF_AGGRESSIVE_VIX_CHANGE_PCT", 8.0),
             backtest_days=env_int("BACKTEST_DAYS", 30),
             backtest_granularity=env_str("BACKTEST_GRANULARITY", "M15"),
             backtest_initial_balance=env_float("BACKTEST_INITIAL_BALANCE", 10000.0),

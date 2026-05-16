@@ -11,4 +11,5 @@ daily_review.json
 missed_opportunities.json
 backtest_cache/
 backtest_output/
+backtest_output*/
 artifacts/

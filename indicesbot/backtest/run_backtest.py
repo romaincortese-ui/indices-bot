@@ -23,11 +23,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--use-calibration", default="")
     parser.add_argument("--calibrate-first", action="store_true")
     parser.add_argument("--walk-forward", type=float, default=0.0, help="Fraction (0-1) of bars to use for in-sample calibration; remainder is out-of-sample test. 0 disables.")
+    parser.add_argument("--macro-scenario", choices=("mixed", "risk-off", "risk-on"), default="mixed")
     args = parser.parse_args(argv)
     config = load_config()
     days = args.days or config.backtest_days
     granularity = args.granularity or config.backtest_granularity
     symbols = tuple(part.strip().upper() for part in args.symbols.replace(",", " ").split() if part.strip()) or config.universe
+    macro_state = _macro_state_for_scenario(args.macro_scenario)
     output_dir = config.backtest_output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
     candles_by_symbol, data_sources = market_candles_by_symbol(config, days=days, source=args.data_source, granularity=granularity, symbols=symbols)
@@ -38,7 +40,7 @@ def main(argv: list[str] | None = None) -> int:
         calibration = load_calibration(Path(args.use_calibration))
         calibration_source = args.use_calibration if calibration else "missing"
     elif args.calibrate_first:
-        baseline_summary = run_backtest(config, candles_by_symbol, min_score=72.0, max_hold_bars=16)
+        baseline_summary = run_backtest(config, candles_by_symbol, macro_state=macro_state, min_score=72.0, max_hold_bars=16)
         calibration = calibration_from_summary(baseline_summary)
         calibration_source = "current_backtest_baseline"
     if args.walk_forward and 0.0 < args.walk_forward < 1.0:
@@ -48,9 +50,9 @@ def main(argv: list[str] | None = None) -> int:
             split = max(1, int(len(bars) * args.walk_forward))
             in_sample[symbol] = bars[:split]
             out_sample[symbol] = bars[split:]
-        is_summary = run_backtest(config, in_sample, min_score=args.min_score, max_hold_bars=args.max_hold_bars)
+        is_summary = run_backtest(config, in_sample, macro_state=macro_state, min_score=args.min_score, max_hold_bars=args.max_hold_bars)
         is_calibration = calibration_from_summary(is_summary)
-        oos_summary = run_backtest(config, out_sample, min_score=args.min_score, max_hold_bars=args.max_hold_bars, calibration=is_calibration)
+        oos_summary = run_backtest(config, out_sample, macro_state=macro_state, min_score=args.min_score, max_hold_bars=args.max_hold_bars, calibration=is_calibration)
         summary = oos_summary
         summary["walk_forward"] = {
             "in_sample_fraction": args.walk_forward,
@@ -60,11 +62,12 @@ def main(argv: list[str] | None = None) -> int:
         calibration = is_calibration
         calibration_source = "walk_forward_in_sample"
     else:
-        summary = run_backtest(config, candles_by_symbol, min_score=args.min_score, max_hold_bars=args.max_hold_bars, calibration=calibration)
+        summary = run_backtest(config, candles_by_symbol, macro_state=macro_state, min_score=args.min_score, max_hold_bars=args.max_hold_bars, calibration=calibration)
     summary["data_source"] = args.data_source
     summary["data_sources"] = data_sources
     summary["days"] = days
     summary["granularity"] = granularity
+    summary["macro_scenario"] = args.macro_scenario
     summary["symbols"] = sorted(candles_by_symbol)
     summary["min_score"] = args.min_score
     summary["max_hold_bars"] = args.max_hold_bars
@@ -86,11 +89,28 @@ def main(argv: list[str] | None = None) -> int:
             writer.writerow({"index": index, "equity": equity})
     calibration_payload = write_calibration(config.calibration_file, calibration or calibration_from_summary(summary))
     write_daily_review(config.daily_review_file, {"events": [], "missed_opportunities": [], "signals_seen": summary["total_trades"]}, summary)
-    response = {"summary": {key: summary[key] for key in ("total_trades", "total_pnl", "return_pct", "profit_factor", "win_rate", "max_drawdown")}, "data_sources": data_sources, "calibration_source": calibration_source, "output_dir": str(output_dir), "calibration": calibration_payload["generated_at"]}
+    response = {"summary": {key: summary[key] for key in ("total_trades", "total_pnl", "return_pct", "profit_factor", "win_rate", "max_drawdown")}, "data_sources": data_sources, "macro_scenario": args.macro_scenario, "calibration_source": calibration_source, "output_dir": str(output_dir), "calibration": calibration_payload["generated_at"]}
     if baseline_summary:
         response["baseline"] = summary["baseline"]
     print(json.dumps(response, indent=2))
     return 0
+
+
+def _macro_state_for_scenario(scenario: str) -> dict:
+    normalized = scenario.lower().strip()
+    if normalized == "risk-off":
+        return {
+            "risk_regime": {"global": "RISK_OFF", "vix": 28.0, "vix_change_pct": 12.0, "us10y_change_bps": -8.0, "dxy_change_pct": 0.6},
+            "event_scores": [{"event_id": "scenario-risk-off", "region": "GLOBAL", "direction": "SHORT", "score": -0.7, "confidence": 0.8, "reason": "Backtest risk-off scenario"}],
+            "events": [],
+        }
+    if normalized == "risk-on":
+        return {
+            "risk_regime": {"global": "RISK_ON", "vix": 15.0, "vix_change_pct": -5.0, "us10y_change_bps": 2.0, "dxy_change_pct": -0.2},
+            "event_scores": [{"event_id": "scenario-risk-on", "region": "GLOBAL", "direction": "LONG", "score": 0.5, "confidence": 0.7, "reason": "Backtest risk-on scenario"}],
+            "events": [],
+        }
+    return {"risk_regime": {"global": "MIXED", "vix_change_pct": 0.0, "us10y_change_bps": 0.0, "dxy_change_pct": 0.0}, "event_scores": [], "events": []}
 
 
 if __name__ == "__main__":

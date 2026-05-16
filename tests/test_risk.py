@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime, timezone
 
 from indicesbot.config import IndicesConfig
@@ -26,3 +27,26 @@ def test_can_open_blocks_same_symbol() -> None:
 
     assert ok is False
     assert reason == "max_open_per_symbol"
+
+
+def test_min_unit_floor_is_guarded() -> None:
+    config = replace(IndicesConfig.from_env(), min_unit_floor_enabled=True, min_unit_floor_max_risk_nav_pct=0.001)
+    account = AccountSummary(10000, 10000, 10000, 0, "USD")
+    details = InstrumentDetails("FR40_EUR", margin_rate=0.02)
+    opportunity = Opportunity("FR40", "FR40_EUR", "LONG", "TEST", 80, 7000, 6995, 7010, 5, 2, 0.01, "test", {})
+
+    position = position_from_opportunity(opportunity, config, account, details, 1.0)
+
+    assert position.units == 1
+    assert position.metadata["min_unit_floor_applied"] is True
+
+
+def test_can_open_blocks_total_indices_risk() -> None:
+    config = replace(IndicesConfig.from_env(), max_total_indices_risk=0.006, max_open_per_symbol=3, max_open_per_region=3)
+    position = IndexPosition("NAS100", "NAS100_USD", "LONG", "TEST", 1, 1, 5000, 4975, 5050, datetime.now(timezone.utc), "US", "2", {"risk_nav_pct": 0.0035})
+    state = {"open_positions": [{"symbol": "SPX500", "region": "US", "metadata": {"risk_nav_pct": 0.003}}]}
+
+    ok, reason = can_open(position, state, config)
+
+    assert ok is False
+    assert reason == "max_total_indices_risk"

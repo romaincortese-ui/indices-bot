@@ -10,7 +10,7 @@ def test_backtest_writes_artifacts(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("INDICES_DAILY_REVIEW_FILE", str(tmp_path / "review.json"))
     monkeypatch.setenv("INDICES_UNIVERSE", "SPX500")
 
-    code = main(["--days", "5"])
+    code = main(["--days", "5", "--macro-scenario", "risk-off"])
 
     assert code == 0
     assert (tmp_path / "out" / "summary.json").exists()
@@ -18,6 +18,7 @@ def test_backtest_writes_artifacts(tmp_path, monkeypatch) -> None:
     summary = json.loads((tmp_path / "out" / "summary.json").read_text(encoding="utf-8"))
     assert "total_trades" in summary
     assert summary["data_source"] == "synthetic"
+    assert summary["macro_scenario"] == "risk-off"
     assert summary["symbols"] == ["SPX500"]
     assert summary["calibration_source"] == "none"
     if summary["trades"]:

@@ -8,6 +8,7 @@ from indicesbot.calibration import strategy_adjustment
 from indicesbot.config import IndicesConfig
 from indicesbot.models import IndexQuote
 from indicesbot.regimes import classify_regime
+from indicesbot.risk_off import macro_strategy_allowed, opportunity_min_score
 from indicesbot.strategies import evaluate_all, select_best_opportunity
 
 
@@ -28,7 +29,12 @@ def run_backtest(config: IndicesConfig, candles_by_symbol: dict[str, list], macr
             opportunities = evaluate_all(config, symbol, instrument, quote, window[-120:], window[-80:], window[-80:], regime, macro, reasons)
             if calibration:
                 opportunities = [_apply_calibration(opportunity, calibration) for opportunity in opportunities]
-            best = select_best_opportunity(opportunities, min_score=min_score)
+            opportunities = [opportunity for opportunity in opportunities if macro_strategy_allowed(config, opportunity, macro)]
+            best = select_best_opportunity(
+                opportunities,
+                min_score=min_score,
+                score_threshold=lambda opportunity: opportunity_min_score(config, opportunity, macro, default_min_score=min_score),
+            )
             if best is None:
                 continue
             exit_price, exit_reason, held_bars = _simulate_exit(candles, index, best, max_hold_bars=max_hold_bars)

@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 from indicesbot.config import IndicesConfig
 from indicesbot.indicators import atr, closes, trend
 from indicesbot.models import Candle, MarketRegime
+from indicesbot.risk_off import risk_off_aggressive_active
 
 
 SESSION_ZONES = {
@@ -55,7 +56,10 @@ def classify_regime(config: IndicesConfig, symbol: str, candles_h1: list[Candle]
         volatility = "LOW"
     else:
         volatility = "NORMAL"
+    aggressive_risk_off = risk_off_aggressive_active(config, macro_state)
     risk_mode = str((macro_state.get("risk_regime") or {}).get("global") or "MIXED").upper()
+    if aggressive_risk_off:
+        risk_mode = "RISK_OFF"
     blockers: list[str] = []
     risk_multiplier = 1.0
     score_long = 0.0
@@ -72,4 +76,8 @@ def classify_regime(config: IndicesConfig, symbol: str, candles_h1: list[Candle]
     elif risk_mode == "RISK_ON":
         score_long += 4.0
         score_short -= 3.0
+    if aggressive_risk_off:
+        score_short += config.risk_off_aggressive_short_score_bonus
+        score_long -= config.risk_off_aggressive_long_score_penalty
+        risk_multiplier *= max(0.0, config.risk_off_aggressive_risk_multiplier)
     return MarketRegime(symbol, region, trend_h4, volatility, risk_mode, session_name(region, now), score_long, score_short, risk_multiplier, tuple(blockers))

@@ -14,10 +14,11 @@ from indicesbot.daily_review import write_daily_review
 from indicesbot.news import high_impact_event_block, load_macro_state, parse_events
 from indicesbot.oanda_client import OandaClient
 from indicesbot.regimes import classify_regime
+from indicesbot.risk_off import macro_strategy_allowed, opportunity_min_score, profit_lock_thresholds, risk_off_aggressive_active, spread_cap_atr
 from indicesbot.risk import can_open, fill_price_from_response, order_id_from_response, position_from_opportunity, position_to_row
 from indicesbot.spread_tracker import SpreadTracker
 from indicesbot.state import StateStore
-from indicesbot.strategies import evaluate_all, select_best_opportunity
+from indicesbot.strategies import evaluate_all, select_best_opportunities
 from indicesbot.telegram import TelegramClient, help_message, order_opened_message, order_rejected_message, opportunity_message, profit_lock_message, startup_message, status_message, trade_closed_message
 
 
@@ -119,6 +120,7 @@ class IndicesRuntime:
             return state
 
         macro_state = load_macro_state(self.config.macro_state_file)
+        aggressive_risk_off = risk_off_aggressive_active(self.config, macro_state)
         events = parse_events(macro_state)
         calibration = load_calibration(self.config.calibration_file)
         if self.config.require_calibration_for_trading and self.config.execution_mode in {"paper", "live"}:
@@ -174,7 +176,8 @@ class IndicesRuntime:
                 continue
             atr_value = max(all_candle_range(candles_m15), 0.0001)
             self.spreads.add(symbol, quote.spread, now=now)
-            spread_decision = self.spreads.evaluate(symbol, quote.spread, static_cap=atr_value * self.config.max_entry_spread_atr, atr_cap=atr_value * self.config.max_entry_spread_atr, now=now)
+            entry_spread_cap = atr_value * spread_cap_atr(self.config, macro_state)
+            spread_decision = self.spreads.evaluate(symbol, quote.spread, static_cap=entry_spread_cap, atr_cap=entry_spread_cap, now=now)
             if not spread_decision.ok:
                 self._record_miss(state, symbol, "UNKNOWN", "UNKNOWN", spread_decision.reason, 0.0)
                 continue
@@ -184,51 +187,72 @@ class IndicesRuntime:
             for opportunity in opportunities:
                 score_offset, risk_multiplier = strategy_adjustment(calibration, symbol=symbol, strategy=opportunity.strategy, direction=opportunity.direction)
                 adjusted.append(replace(opportunity, score=opportunity.score + score_offset, risk_multiplier=opportunity.risk_multiplier * risk_multiplier))
+            adjusted = [opportunity for opportunity in adjusted if macro_strategy_allowed(self.config, opportunity, macro_state)]
             all_opportunities.extend(adjusted)
             all_reasons.extend([f"{symbol}:{reason}" for reason in reasons])
         state["signals_seen"] = int(state.get("signals_seen", 0) or 0) + len(all_opportunities)
-        best = select_best_opportunity(all_opportunities, min_score=self.config.min_score)
-        if best is None:
+        candidates = select_best_opportunities(
+            all_opportunities,
+            min_score=self.config.min_score,
+            score_threshold=lambda opportunity: opportunity_min_score(self.config, opportunity, macro_state, default_min_score=self.config.min_score),
+        )
+        if not candidates:
             state["last_scan"] = {"status": "idle", "blocked_by": "score_below_threshold", "reasons": all_reasons[-25:], "at": now.isoformat()}
             self._save_status(state, "idle")
             log.info("scan_idle reason=score_below_threshold opportunities=%d", len(all_opportunities))
             return state
         if self.config.execution_mode == "signal_only":
+            best = candidates[0]
             state["last_scan"] = {"status": "signal_only", "best_opportunity": best.symbol, "at": now.isoformat()}
             self.telegram.send(opportunity_message(best, mode="signal_only"))
             self._save_status(state, "signal_only")
             return state
-        details = self.client.instrument_details(best.instrument)
-        position = position_from_opportunity(best, self.config, account, details, self.client.home_conversion_factor(best.instrument, best.direction))
-        can_trade, reason = can_open(position, state, self.config)
-        if not can_trade:
-            self._record_miss(state, best.symbol, best.direction, best.strategy, reason, best.score)
-            state["last_scan"] = {"status": "blocked", "blocked_by": reason, "best_opportunity": best.symbol, "at": now.isoformat()}
-            self._save_status(state, "blocked")
-            log.info("scan_blocked reason=%s best_symbol=%s best_strategy=%s score=%.2f", reason, best.symbol, best.strategy, best.score)
+        opened: list[dict[str, Any]] = []
+        blocked: list[dict[str, Any]] = []
+        max_orders = max(1, self.config.max_live_orders_per_scan)
+        for best in candidates:
+            if len(opened) >= max_orders:
+                break
+            metadata = dict(best.metadata)
+            if aggressive_risk_off and best.direction.upper() == "SHORT":
+                metadata["risk_off_aggressive"] = True
+            best_for_order = replace(best, metadata=metadata)
+            details = self.client.instrument_details(best_for_order.instrument)
+            position = position_from_opportunity(best_for_order, self.config, account, details, self.client.home_conversion_factor(best_for_order.instrument, best_for_order.direction))
+            can_trade, reason = can_open(position, state, self.config)
+            if not can_trade:
+                blocked.append({"symbol": best_for_order.symbol, "direction": best_for_order.direction, "strategy": best_for_order.strategy, "reason": reason, "score": best_for_order.score})
+                self._record_miss(state, best_for_order.symbol, best_for_order.direction, best_for_order.strategy, reason, best_for_order.score)
+                log.info("scan_blocked reason=%s best_symbol=%s best_strategy=%s score=%.2f", reason, best_for_order.symbol, best_for_order.strategy, best_for_order.score)
+                continue
+            try:
+                response = self.client.place_market_order(best_for_order, position.order_units)
+                order_id = order_id_from_response(response)
+                if not order_id:
+                    raise RuntimeError("order_not_filled")
+                fill_price = fill_price_from_response(response)
+                if fill_price:
+                    position.entry_price = fill_price
+                position.order_id = order_id
+                row = position_to_row(position)
+                state.setdefault("open_positions", []).append(row)
+                state.setdefault("events", []).append({"type": "trade_opened", "symbol": best_for_order.symbol, "direction": best_for_order.direction, "strategy": best_for_order.strategy, "order_id": order_id, "at": now.isoformat()})
+                opened.append({"symbol": best_for_order.symbol, "direction": best_for_order.direction, "strategy": best_for_order.strategy, "order_id": order_id})
+                self.telegram.send(order_opened_message(position))
+                log.info("trade_opened symbol=%s direction=%s strategy=%s units=%.2f order_id=%s", best_for_order.symbol, best_for_order.direction, best_for_order.strategy, position.units, order_id)
+            except Exception as exc:
+                reason = str(exc)
+                blocked.append({"symbol": best_for_order.symbol, "direction": best_for_order.direction, "strategy": best_for_order.strategy, "reason": reason, "score": best_for_order.score})
+                self._record_miss(state, best_for_order.symbol, best_for_order.direction, best_for_order.strategy, reason, best_for_order.score)
+                self.telegram.send(order_rejected_message(symbol=best_for_order.symbol, direction=best_for_order.direction, strategy=best_for_order.strategy, reason=reason))
+                log.info("order_not_filled symbol=%s direction=%s strategy=%s blocked_by=%s", best_for_order.symbol, best_for_order.direction, best_for_order.strategy, reason)
+        if opened:
+            state["last_scan"] = {"status": "trade_opened", "opened": opened, "blocked": blocked[:5], "at": now.isoformat()}
+            self._save_status(state, "running")
             return state
-        try:
-            response = self.client.place_market_order(best, position.order_units)
-            order_id = order_id_from_response(response)
-            if not order_id:
-                raise RuntimeError("order_not_filled")
-            fill_price = fill_price_from_response(response)
-            if fill_price:
-                position.entry_price = fill_price
-            position.order_id = order_id
-            row = position_to_row(position)
-            state.setdefault("open_positions", []).append(row)
-            state.setdefault("events", []).append({"type": "trade_opened", "symbol": best.symbol, "direction": best.direction, "strategy": best.strategy, "order_id": order_id, "at": now.isoformat()})
-            state["last_scan"] = {"status": "trade_opened", "symbol": best.symbol, "direction": best.direction, "strategy": best.strategy, "at": now.isoformat()}
-            self.telegram.send(order_opened_message(position))
-            log.info("trade_opened symbol=%s direction=%s strategy=%s units=%.2f order_id=%s", best.symbol, best.direction, best.strategy, position.units, order_id)
-        except Exception as exc:
-            reason = str(exc)
-            self._record_miss(state, best.symbol, best.direction, best.strategy, reason, best.score)
-            self.telegram.send(order_rejected_message(symbol=best.symbol, direction=best.direction, strategy=best.strategy, reason=reason))
-            state["last_scan"] = {"status": "order_rejected", "blocked_by": reason, "symbol": best.symbol, "at": now.isoformat()}
-            log.info("order_not_filled symbol=%s direction=%s strategy=%s blocked_by=%s", best.symbol, best.direction, best.strategy, reason)
-        self._save_status(state, "running")
+        blocked_by = blocked[0]["reason"] if blocked else "no_order_opened"
+        state["last_scan"] = {"status": "blocked", "blocked_by": blocked_by, "blocked": blocked[:5], "at": now.isoformat()}
+        self._save_status(state, "blocked")
         return state
 
     def _sync_closed_positions(self, state: dict[str, Any]) -> list[dict[str, Any]]:
@@ -344,7 +368,8 @@ class IndicesRuntime:
                 metadata["peak_unrealized_pl"] = _position_unrealized_pl(row)
                 row["metadata"] = metadata
             pullback_pct = peak_pnl_pct - pnl_pct
-            if peak_pnl_pct < max(0.0, self.config.profit_lock_trigger_pct) or pullback_pct < max(0.0, self.config.profit_lock_pullback_pct) or pnl_pct <= 0.0:
+            trigger_pct, pullback_trigger_pct = profit_lock_thresholds(self.config, metadata)
+            if peak_pnl_pct < max(0.0, trigger_pct) or pullback_pct < max(0.0, pullback_trigger_pct) or pnl_pct <= 0.0:
                 kept_rows.append(row)
                 continue
             if broker_available:
