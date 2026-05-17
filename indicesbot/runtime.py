@@ -11,7 +11,7 @@ from typing import Any
 from indicesbot.calibration import calibration_quality, load_calibration, strategy_adjustment
 from indicesbot.config import IndicesConfig, load_config
 from indicesbot.daily_review import write_daily_review
-from indicesbot.news import high_impact_event_block, load_macro_state, parse_events
+from indicesbot.news import default_macro_state, high_impact_event_block, load_macro_state, parse_events
 from indicesbot.oanda_client import OandaClient
 from indicesbot.regimes import classify_regime
 from indicesbot.risk_off import macro_strategy_allowed, opportunity_min_score, profit_lock_thresholds, risk_off_aggressive_active, spread_cap_atr
@@ -119,7 +119,7 @@ class IndicesRuntime:
             self._save_status(state, "paused")
             return state
 
-        macro_state = load_macro_state(self.config.macro_state_file)
+        macro_state = self._load_macro_state()
         aggressive_risk_off = risk_off_aggressive_active(self.config, macro_state)
         events = parse_events(macro_state)
         calibration = load_calibration(self.config.calibration_file)
@@ -173,6 +173,7 @@ class IndicesRuntime:
             event_block = high_impact_event_block(regime.region, events, now, pre_minutes=self.config.pre_event_pause_minutes, post_minutes=self.config.post_event_settle_minutes)
             if event_block:
                 self._record_miss(state, symbol, "UNKNOWN", "UNKNOWN", "event_pause", 0.0)
+                all_reasons.append(f"{symbol}:{event_block}")
                 continue
             atr_value = max(all_candle_range(candles_m15), 0.0001)
             self.spreads.add(symbol, quote.spread, now=now)
@@ -427,7 +428,7 @@ class IndicesRuntime:
             elif text == "/open":
                 self.telegram.send(_open_positions_message(state))
             elif text == "/events":
-                self.telegram.send(_events_message(load_macro_state(self.config.macro_state_file)))
+                self.telegram.send(_events_message(self._load_macro_state()))
             elif text == "/pause":
                 state["paused"] = True
                 self.telegram.send("Indices Bot paused. New entries are paused; existing positions remain monitored.")
@@ -443,6 +444,16 @@ class IndicesRuntime:
             elif text in {"/help", "help"}:
                 self.telegram.send(help_message())
         self.telegram.save_offset(offset)
+
+    def _load_macro_state(self) -> dict[str, Any]:
+        if not self.config.news_enabled:
+            return default_macro_state(source_status="disabled")
+        return load_macro_state(
+            self.config.macro_state_file,
+            redis_url=self.config.redis_url,
+            redis_key=self.config.macro_state_key,
+            max_age_minutes=self.config.macro_state_max_age_minutes,
+        )
 
     def _record_miss(self, state: dict[str, Any], symbol: str, direction: str, strategy: str, reason: str, score: float) -> None:
         state.setdefault("missed_opportunities", []).append({"symbol": symbol, "direction": direction, "strategy": strategy, "blocked_by": reason, "score": score, "at": datetime.now(timezone.utc).isoformat()})

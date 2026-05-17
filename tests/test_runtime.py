@@ -1,5 +1,6 @@
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+import json
 
 from indicesbot.config import IndicesConfig
 from indicesbot.models import AccountSummary, Candle, IndexQuote, InstrumentDetails
@@ -126,6 +127,33 @@ def test_runtime_skips_symbol_on_market_data_error(tmp_path, monkeypatch) -> Non
 
     assert state["last_scan"]["status"] == "idle"
     assert any("SPX500:market_data_error:" in reason for reason in state["last_scan"]["reasons"])
+
+
+def test_runtime_blocks_jp225_on_fx_macro_high_impact_event(tmp_path, monkeypatch) -> None:
+    macro_path = tmp_path / "macro.json"
+    macro_path.write_text(json.dumps({
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "news_events": [
+            {
+                "currency": "JPY",
+                "event": "BoJ policy statement",
+                "impact": "High",
+                "time": (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat(),
+            }
+        ],
+    }), encoding="utf-8")
+    monkeypatch.setenv("INDICES_STATE_FILE", str(tmp_path / "state.json"))
+    monkeypatch.setenv("INDICES_DAILY_REVIEW_FILE", str(tmp_path / "review.json"))
+    monkeypatch.setenv("INDICES_MACRO_STATE_FILE", str(macro_path))
+    monkeypatch.setenv("INDICES_REQUIRE_CALIBRATION", "false")
+    monkeypatch.setenv("INDICES_UNIVERSE", "JP225")
+    config = IndicesConfig.from_env()
+    runtime = IndicesRuntime(config, client=Client(), telegram=Telegram())
+
+    state = runtime.run_cycle()
+
+    assert state["last_scan"]["status"] == "idle"
+    assert any("JP225:event_pause:BoJ policy statement" in reason for reason in state["last_scan"]["reasons"])
 
 
 def test_startup_message_is_deduplicated(tmp_path, monkeypatch) -> None:
