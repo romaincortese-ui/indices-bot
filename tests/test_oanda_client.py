@@ -16,13 +16,14 @@ class Response:
 
 
 class Session:
-    def __init__(self) -> None:
+    def __init__(self, instruments=None) -> None:
         self.calls = []
+        self.instruments = instruments or [{"name": "SPX500_USD", "displayPrecision": 1, "tradeUnitsPrecision": 0, "marginRate": "0.05"}]
 
     def request(self, method, url, **kwargs):
         self.calls.append((method, url, kwargs))
         if url.endswith("/instruments"):
-            return Response(payload={"instruments": [{"name": "SPX500_USD", "displayPrecision": 1, "tradeUnitsPrecision": 0, "marginRate": "0.05"}]})
+            return Response(payload={"instruments": self.instruments})
         if url.endswith("/orders"):
             return Response(payload={"orderFillTransaction": {"id": "10", "price": "5100.1", "tradeOpened": {"tradeID": "99"}}})
         return Response(payload={})
@@ -64,3 +65,22 @@ def test_close_trade_requests_full_trade_close(monkeypatch) -> None:
     assert method == "PUT"
     assert url.endswith("/v3/accounts/acct/trades/159/close")
     assert body == {"units": "ALL"}
+
+
+def test_live_order_formats_fractional_units(monkeypatch) -> None:
+    monkeypatch.setenv("OANDA_ACCOUNT_ID", "acct")
+    monkeypatch.setenv("OANDA_API_TOKEN", "token")
+    monkeypatch.setenv("PAPER_TRADE", "false")
+    monkeypatch.setenv("LIVE_TRADING_ENABLED", "true")
+    monkeypatch.setenv("EXECUTION_MODE", "paper")
+    config = IndicesConfig.from_env()
+    session = Session(instruments=[{"name": "SPX500_USD", "displayPrecision": 1, "tradeUnitsPrecision": 2, "minimumTradeSize": "0.01", "marginRate": "0.05"}])
+    client = OandaClient(config, session=session)
+    opportunity = Opportunity("SPX500", "SPX500_USD", "LONG", "TEST", 80, 5100, 5080, 5140, 15, 2, 1, "test", {})
+
+    client.place_market_order(opportunity, 0.01)
+
+    details = client.instrument_details("SPX500_USD")
+    body = json.loads(session.calls[-1][2]["data"])
+    assert details.minimum_trade_size == 0.01
+    assert body["order"]["units"] == "0.01"

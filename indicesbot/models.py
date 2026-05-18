@@ -22,6 +22,7 @@ class InstrumentDetails:
     display_precision: int = 5
     trade_units_precision: int = 0
     margin_rate: float = 0.05
+    minimum_trade_size: float = 1.0
 
 
 @dataclass(frozen=True, slots=True)

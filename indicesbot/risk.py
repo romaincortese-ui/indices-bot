@@ -10,19 +10,22 @@ from indicesbot.models import AccountSummary, IndexPosition, InstrumentDetails, 
 
 def position_from_opportunity(opportunity: Opportunity, config: IndicesConfig, account: AccountSummary, details: InstrumentDetails, conversion_factor: float) -> IndexPosition:
     stop_distance = abs(opportunity.entry_price - opportunity.stop_price)
-    nav = max(account.nav, account.balance, config.paper_balance)
-    risk_amount = nav * config.budget_allocation * config.max_risk_per_trade * opportunity.risk_multiplier
+    nav = max(account.nav, account.balance, 0.0001)
+    target_risk_amount = nav * config.budget_allocation * config.max_risk_per_trade * opportunity.risk_multiplier
     per_unit_risk = max(stop_distance * max(conversion_factor, 0.0001), 0.0001)
-    raw_units = floor(risk_amount / per_unit_risk)
+    raw_units = target_risk_amount / per_unit_risk
     margin_per_unit = opportunity.entry_price * max(details.margin_rate, 0.0001) * max(conversion_factor, 0.0001)
-    max_units_by_margin = floor(max(0.0, account.margin_available * config.max_margin_per_entry_pct) / max(margin_per_unit, 0.0001))
-    units = max(0, min(raw_units, max_units_by_margin))
-    one_unit_risk_nav_pct = per_unit_risk / max(nav, 0.0001)
+    max_units_by_margin = max(0.0, account.margin_available * config.max_margin_per_entry_pct) / max(margin_per_unit, 0.0001)
+    unit_step = _unit_step(details)
+    minimum_trade_size = max(details.minimum_trade_size, unit_step)
+    units = _floor_to_unit_step(max(0.0, min(raw_units, max_units_by_margin)), unit_step, details.trade_units_precision)
+    minimum_unit_risk_nav_pct = minimum_trade_size * per_unit_risk / max(nav, 0.0001)
     min_unit_floor_applied = False
-    if units < 1 and config.min_unit_floor_enabled and max_units_by_margin >= 1 and one_unit_risk_nav_pct <= config.min_unit_floor_max_risk_nav_pct:
-        units = 1
+    if units < minimum_trade_size and config.min_unit_floor_enabled and max_units_by_margin >= minimum_trade_size and minimum_unit_risk_nav_pct <= config.min_unit_floor_max_risk_nav_pct:
+        units = _round_units(minimum_trade_size, details.trade_units_precision)
         min_unit_floor_applied = True
     signed_units = units if opportunity.direction == "LONG" else -units
+    actual_risk_amount = units * per_unit_risk
     return IndexPosition(
         symbol=opportunity.symbol,
         instrument=opportunity.instrument,
@@ -38,12 +41,16 @@ def position_from_opportunity(opportunity: Opportunity, config: IndicesConfig, a
         order_id="pending",
         metadata={
             "score": opportunity.score,
-            "risk_amount": risk_amount,
-            "risk_nav_pct": risk_amount / max(nav, 0.0001),
+            "risk_amount": actual_risk_amount,
+            "risk_nav_pct": actual_risk_amount / max(nav, 0.0001),
+            "target_risk_amount": target_risk_amount,
+            "target_risk_nav_pct": target_risk_amount / max(nav, 0.0001),
             "nav_at_entry": nav,
             "raw_units": raw_units,
             "max_units_by_margin": max_units_by_margin,
-            "one_unit_risk_nav_pct": one_unit_risk_nav_pct,
+            "minimum_trade_size": minimum_trade_size,
+            "unit_step": unit_step,
+            "minimum_unit_risk_nav_pct": minimum_unit_risk_nav_pct,
             "min_unit_floor_applied": min_unit_floor_applied,
             **opportunity.metadata,
         },
@@ -51,7 +58,7 @@ def position_from_opportunity(opportunity: Opportunity, config: IndicesConfig, a
 
 
 def can_open(position: IndexPosition, state: dict[str, Any], config: IndicesConfig) -> tuple[bool, str]:
-    if position.units < 1:
+    if position.units <= 0:
         return False, "units_below_minimum"
     rows = state.get("open_positions", []) if isinstance(state.get("open_positions"), list) else []
     if len(rows) >= config.max_open_indices_trades:
@@ -88,6 +95,21 @@ def _float_or_zero(value: object) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _unit_step(details: InstrumentDetails) -> float:
+    precision_step = 10 ** -max(0, details.trade_units_precision)
+    return max(precision_step, 0.00000001)
+
+
+def _floor_to_unit_step(value: float, step: float, precision: int) -> float:
+    if value <= 0:
+        return 0.0
+    return _round_units(floor((value + 1e-12) / step) * step, precision)
+
+
+def _round_units(value: float, precision: int) -> float:
+    return round(value, max(0, precision))
 
 
 def position_to_row(position: IndexPosition) -> dict[str, Any]:

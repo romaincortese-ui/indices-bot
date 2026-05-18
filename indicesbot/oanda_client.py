@@ -182,11 +182,13 @@ class OandaClient:
             if not isinstance(row, dict) or not row.get("name"):
                 continue
             name = str(row["name"]).upper()
+            trade_units_precision = _int(row.get("tradeUnitsPrecision"), 0)
             self._instrument_cache[name] = InstrumentDetails(
                 name=name,
                 display_precision=_int(row.get("displayPrecision"), 5),
-                trade_units_precision=_int(row.get("tradeUnitsPrecision"), 0),
+                trade_units_precision=trade_units_precision,
                 margin_rate=max(_float(row.get("marginRate"), 0.05), 0.0001),
+                minimum_trade_size=max(_float(row.get("minimumTradeSize"), 10 ** -trade_units_precision if trade_units_precision > 0 else 1.0), 0.00000001),
             )
         return self._instrument_cache
 
