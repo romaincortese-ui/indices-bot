@@ -137,6 +137,8 @@ indices-bot calibrate
 
 Paper and live workers require a usable calibration file by default. Run calibration first, or set `INDICES_REQUIRE_CALIBRATION=false` only for diagnostic signal checks.
 
+Small live accounts can enable fractional minimum-unit entries with `INDICES_MIN_UNIT_FLOOR_ENABLED=true`. The floor still requires broker margin to fit, caps one minimum-unit trade with `INDICES_MIN_UNIT_FLOOR_SMALL_ACCOUNT_MAX_RISK_NAV_PCT`, rejects floor trades whose minimum unit would consume more than `INDICES_MIN_UNIT_FLOOR_SMALL_ACCOUNT_MAX_MARGIN_NAV_PCT` of NAV as margin, and caps overlapping floor exposure with `INDICES_MIN_UNIT_FLOOR_SMALL_ACCOUNT_MAX_TOTAL_RISK_NAV_PCT`.
+
 Run a 30-day online-data backtest:
 
 ```powershell

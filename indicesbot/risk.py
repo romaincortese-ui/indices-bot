@@ -20,10 +20,34 @@ def position_from_opportunity(opportunity: Opportunity, config: IndicesConfig, a
     minimum_trade_size = max(details.minimum_trade_size, unit_step)
     units = _floor_to_unit_step(max(0.0, min(raw_units, max_units_by_margin)), unit_step, details.trade_units_precision)
     minimum_unit_risk_nav_pct = minimum_trade_size * per_unit_risk / max(nav, 0.0001)
+    target_risk_nav_pct = target_risk_amount / max(nav, 0.0001)
+    minimum_unit_target_risk_multiple = minimum_unit_risk_nav_pct / max(target_risk_nav_pct, 0.0001)
+    minimum_unit_margin_amount = minimum_trade_size * margin_per_unit
+    minimum_unit_margin_nav_pct = minimum_unit_margin_amount / max(nav, 0.0001)
     min_unit_floor_applied = False
-    if units < minimum_trade_size and config.min_unit_floor_enabled and max_units_by_margin >= minimum_trade_size and minimum_unit_risk_nav_pct <= config.min_unit_floor_max_risk_nav_pct:
-        units = _round_units(minimum_trade_size, details.trade_units_precision)
-        min_unit_floor_applied = True
+    min_unit_floor_reason = "not_needed" if units >= minimum_trade_size else "disabled"
+    if units < minimum_trade_size and config.min_unit_floor_enabled:
+        margin_ok = max_units_by_margin >= minimum_trade_size
+        primary_risk_ok = minimum_unit_risk_nav_pct <= max(0.0, config.min_unit_floor_max_risk_nav_pct)
+        small_account_margin_ok = minimum_unit_margin_nav_pct <= max(0.0, config.min_unit_floor_small_account_max_margin_nav_pct)
+        small_account_risk_ok = (
+            minimum_unit_risk_nav_pct <= max(0.0, config.min_unit_floor_small_account_max_risk_nav_pct)
+            and minimum_unit_target_risk_multiple <= max(1.0, config.min_unit_floor_max_target_risk_multiple)
+            and small_account_margin_ok
+        )
+        if not margin_ok:
+            min_unit_floor_reason = "margin_required_above_available"
+        elif primary_risk_ok:
+            min_unit_floor_reason = "primary_risk_cap"
+        elif small_account_risk_ok:
+            min_unit_floor_reason = "small_account_risk_cap"
+        elif not small_account_margin_ok:
+            min_unit_floor_reason = "small_account_margin_cap_exceeded"
+        else:
+            min_unit_floor_reason = "risk_cap_exceeded"
+        if margin_ok and (primary_risk_ok or small_account_risk_ok):
+            units = _round_units(minimum_trade_size, details.trade_units_precision)
+            min_unit_floor_applied = True
     signed_units = units if opportunity.direction == "LONG" else -units
     actual_risk_amount = units * per_unit_risk
     return IndexPosition(
@@ -44,14 +68,18 @@ def position_from_opportunity(opportunity: Opportunity, config: IndicesConfig, a
             "risk_amount": actual_risk_amount,
             "risk_nav_pct": actual_risk_amount / max(nav, 0.0001),
             "target_risk_amount": target_risk_amount,
-            "target_risk_nav_pct": target_risk_amount / max(nav, 0.0001),
+            "target_risk_nav_pct": target_risk_nav_pct,
             "nav_at_entry": nav,
             "raw_units": raw_units,
             "max_units_by_margin": max_units_by_margin,
             "minimum_trade_size": minimum_trade_size,
             "unit_step": unit_step,
             "minimum_unit_risk_nav_pct": minimum_unit_risk_nav_pct,
+            "minimum_unit_target_risk_multiple": minimum_unit_target_risk_multiple,
+            "minimum_unit_margin_amount": minimum_unit_margin_amount,
+            "minimum_unit_margin_nav_pct": minimum_unit_margin_nav_pct,
             "min_unit_floor_applied": min_unit_floor_applied,
+            "min_unit_floor_reason": min_unit_floor_reason,
             **opportunity.metadata,
         },
     )
@@ -64,9 +92,16 @@ def can_open(position: IndexPosition, state: dict[str, Any], config: IndicesConf
     if len(rows) >= config.max_open_indices_trades:
         return False, "max_open_indices_trades"
     total_risk = sum(_risk_nav_pct(row, config) for row in rows)
-    total_risk += _float_or_zero(position.metadata.get("risk_nav_pct"))
+    current_risk = _float_or_zero(position.metadata.get("risk_nav_pct"))
+    total_risk += current_risk
     if total_risk > max(0.0, config.max_total_indices_risk):
-        return False, "max_total_indices_risk"
+        small_account_floor_allowed = (
+            bool(position.metadata.get("min_unit_floor_applied"))
+            and current_risk <= max(0.0, config.min_unit_floor_small_account_max_risk_nav_pct)
+            and total_risk <= max(0.0, config.min_unit_floor_small_account_max_total_risk_nav_pct)
+        )
+        if not small_account_floor_allowed:
+            return False, "max_total_indices_risk"
     same_symbol = [row for row in rows if str(row.get("symbol", "")).upper() == position.symbol.upper()]
     if len(same_symbol) >= config.max_open_per_symbol:
         return False, "max_open_per_symbol"

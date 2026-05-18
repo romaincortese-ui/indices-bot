@@ -19,6 +19,10 @@ def test_config_defaults_safe(monkeypatch) -> None:
     assert config.risk_off_aggressive_enabled is False
     assert config.risk_off_aggressive_enabled_strategies == ("EVENT_MOMENTUM", "OPENING_RANGE_BREAKOUT")
     assert config.min_unit_floor_enabled is False
+    assert config.min_unit_floor_small_account_max_risk_nav_pct == 0.06
+    assert config.min_unit_floor_small_account_max_total_risk_nav_pct == 0.10
+    assert config.min_unit_floor_small_account_max_margin_nav_pct == 0.60
+    assert config.min_unit_floor_max_target_risk_multiple == 12.0
 
 
 def test_invalid_bool_raises(monkeypatch) -> None:

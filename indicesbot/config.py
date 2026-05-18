@@ -124,6 +124,10 @@ class IndicesConfig:
     min_margin_per_entry_pct: float
     min_unit_floor_enabled: bool
     min_unit_floor_max_risk_nav_pct: float
+    min_unit_floor_small_account_max_risk_nav_pct: float
+    min_unit_floor_small_account_max_total_risk_nav_pct: float
+    min_unit_floor_small_account_max_margin_nav_pct: float
+    min_unit_floor_max_target_risk_multiple: float
     daily_loss_halt_pct: float
     rolling_dd_throttle_pct: float
     rolling_dd_halt_pct: float
@@ -213,6 +217,10 @@ class IndicesConfig:
             min_margin_per_entry_pct=env_float("MIN_MARGIN_PER_ENTRY_PCT", 0.02),
             min_unit_floor_enabled=env_bool("INDICES_MIN_UNIT_FLOOR_ENABLED", False),
             min_unit_floor_max_risk_nav_pct=env_float("INDICES_MIN_UNIT_FLOOR_MAX_RISK_NAV_PCT", 0.001),
+            min_unit_floor_small_account_max_risk_nav_pct=env_float("INDICES_MIN_UNIT_FLOOR_SMALL_ACCOUNT_MAX_RISK_NAV_PCT", 0.06),
+            min_unit_floor_small_account_max_total_risk_nav_pct=env_float("INDICES_MIN_UNIT_FLOOR_SMALL_ACCOUNT_MAX_TOTAL_RISK_NAV_PCT", 0.10),
+            min_unit_floor_small_account_max_margin_nav_pct=env_float("INDICES_MIN_UNIT_FLOOR_SMALL_ACCOUNT_MAX_MARGIN_NAV_PCT", 0.60),
+            min_unit_floor_max_target_risk_multiple=env_float("INDICES_MIN_UNIT_FLOOR_MAX_TARGET_RISK_MULTIPLE", 12.0),
             min_score=env_float("INDICES_MIN_SCORE", 78.0),
             max_hold_bars=env_int("INDICES_MAX_HOLD_BARS", 12),
             bar_minutes=env_int("INDICES_BAR_MINUTES", 15),
