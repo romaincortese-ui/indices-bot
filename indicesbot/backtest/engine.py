@@ -37,7 +37,7 @@ def run_backtest(config: IndicesConfig, candles_by_symbol: dict[str, list], macr
             )
             if best is None:
                 continue
-            exit_price, exit_reason, held_bars = _simulate_exit(candles, index, best, max_hold_bars=max_hold_bars)
+            exit_price, exit_reason, held_bars = _simulate_exit(candles, index, best, max_hold_bars=max_hold_bars, config=config)
             pnl_points = (exit_price - best.entry_price) if best.direction == "LONG" else (best.entry_price - exit_price)
             stop_distance = max(abs(best.entry_price - best.stop_price), 0.0001)
             r_multiple = pnl_points / stop_distance
@@ -92,13 +92,30 @@ def _apply_calibration(opportunity: Any, calibration: dict[str, Any]) -> Any:
     return replace(opportunity, score=opportunity.score + score_offset, risk_multiplier=opportunity.risk_multiplier * risk_multiplier)
 
 
-def _simulate_exit(candles: list, entry_index: int, opportunity: Any, *, max_hold_bars: int) -> tuple[float, str, int]:
+def _simulate_exit(candles: list, entry_index: int, opportunity: Any, *, max_hold_bars: int, config: IndicesConfig | None = None) -> tuple[float, str, int]:
     future = candles[entry_index + 1 : min(len(candles), entry_index + max(1, max_hold_bars) + 1)]
     if not future:
         return candles[entry_index].close, "end_of_data", 0
     target = opportunity.take_profit_price
+    stop_distance = max(abs(opportunity.entry_price - opportunity.stop_price), 0.0001)
+    profit_lock_enabled = bool(getattr(config, "profit_lock_enabled", False))
+    trigger_r = max(0.0, float(getattr(config, "profit_lock_trigger_pct", 0.0))) / 100.0
+    pullback_r = max(0.0, float(getattr(config, "profit_lock_pullback_pct", 0.0))) / 100.0
+    peak_r = 0.0
+    lock_armed = False
+    lock_floor_r = 0.0
     for held_bars, candle in enumerate(future, start=1):
+        armed_before = lock_armed
         if opportunity.direction == "LONG":
+            if profit_lock_enabled:
+                peak_r = max(peak_r, (candle.high - opportunity.entry_price) / stop_distance)
+                if peak_r >= trigger_r:
+                    lock_armed = True
+                    lock_floor_r = max(0.0, peak_r - pullback_r)
+                if armed_before and lock_floor_r > 0.0:
+                    lock_price = opportunity.entry_price + lock_floor_r * stop_distance
+                    if candle.low <= lock_price:
+                        return lock_price, "peak_pullback_profit_lock", held_bars
             stopped = candle.low <= opportunity.stop_price
             targeted = target is not None and candle.high >= target
             if stopped and targeted:
@@ -108,6 +125,15 @@ def _simulate_exit(candles: list, entry_index: int, opportunity: Any, *, max_hol
             if targeted:
                 return float(target), "target", held_bars
         else:
+            if profit_lock_enabled:
+                peak_r = max(peak_r, (opportunity.entry_price - candle.low) / stop_distance)
+                if peak_r >= trigger_r:
+                    lock_armed = True
+                    lock_floor_r = max(0.0, peak_r - pullback_r)
+                if armed_before and lock_floor_r > 0.0:
+                    lock_price = opportunity.entry_price - lock_floor_r * stop_distance
+                    if candle.high >= lock_price:
+                        return lock_price, "peak_pullback_profit_lock", held_bars
             stopped = candle.high >= opportunity.stop_price
             targeted = target is not None and candle.low <= target
             if stopped and targeted:

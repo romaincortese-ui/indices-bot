@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
+from indicesbot.backtest.engine import _simulate_exit
 from indicesbot.backtest.run_backtest import main
 
 
@@ -25,3 +27,19 @@ def test_backtest_writes_artifacts(tmp_path, monkeypatch) -> None:
         assert "exit_reason" in summary["trades"][0]
         assert "r_multiple" in summary["trades"][0]
         assert "risk_amount" in summary["trades"][0]
+
+
+def test_profit_lock_exit_protects_positive_trade() -> None:
+    config = SimpleNamespace(profit_lock_enabled=True, profit_lock_trigger_pct=15.0, profit_lock_pullback_pct=2.0)
+    opportunity = SimpleNamespace(direction="LONG", entry_price=100.0, stop_price=90.0, take_profit_price=None)
+    candles = [
+        SimpleNamespace(close=100.0, high=100.0, low=100.0),
+        SimpleNamespace(close=102.0, high=102.0, low=100.5),
+        SimpleNamespace(close=101.7, high=102.0, low=101.5),
+    ]
+
+    exit_price, exit_reason, held_bars = _simulate_exit(candles, 0, opportunity, max_hold_bars=4, config=config)
+
+    assert exit_reason == "peak_pullback_profit_lock"
+    assert exit_price > opportunity.entry_price
+    assert held_bars == 2
