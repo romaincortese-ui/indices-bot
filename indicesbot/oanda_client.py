@@ -134,6 +134,22 @@ class OandaClient:
             return {"paper": True, "tradeID": trade_id, "units": units}
         return self._request("PUT", f"/v3/accounts/{self.config.oanda_account_id}/trades/{trade_id}/close", {"units": units})
 
+    def recent_trade_close(self, trade_id: str, count: int = 100) -> dict[str, object] | None:
+        if self.config.paper_trade or not self.config.has_oanda_credentials:
+            return None
+        target = str(trade_id or "").strip()
+        if not target:
+            return None
+        payload = self._request(
+            "GET",
+            f"/v3/accounts/{self.config.oanda_account_id}/transactions?{urlencode({'count': max(1, min(500, int(count))), 'type': 'ORDER_FILL'})}",
+        )
+        transactions = payload.get("transactions", []) if isinstance(payload, dict) else []
+        for transaction in reversed(transactions if isinstance(transactions, list) else []):
+            if isinstance(transaction, dict) and target in _transaction_trade_ids(transaction):
+                return transaction
+        return None
+
     def home_conversion_factor(self, instrument: str, side: str) -> float:
         if self.config.paper_trade or not self.config.has_oanda_credentials:
             return 1.0
@@ -242,6 +258,21 @@ def _extract_error(response: requests.Response) -> str:
         return str(payload)[:500]
     except Exception:
         return response.text[:500]
+
+
+def _transaction_trade_ids(transaction: dict[str, object]) -> set[str]:
+    ids: set[str] = set()
+    for key in ("tradesClosed", "tradesReduced"):
+        rows = transaction.get(key)
+        if isinstance(rows, list):
+            for row in rows:
+                if isinstance(row, dict) and row.get("tradeID"):
+                    ids.add(str(row["tradeID"]))
+    for key in ("tradeClosed", "tradeReduced", "tradeOpened"):
+        row = transaction.get(key)
+        if isinstance(row, dict) and row.get("tradeID"):
+            ids.add(str(row["tradeID"]))
+    return ids
 
 
 def _format_units(value: float, precision: int) -> str:

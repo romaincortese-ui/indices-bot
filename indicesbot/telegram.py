@@ -24,6 +24,7 @@ def _humanize(value: object, default: str = "n/a") -> str:
     text = "" if value is None else str(value).strip()
     if not text:
         return default
+    lookup = text.lower()
     mapping = {
         "calibration_missing": "calibration file missing",
         "calibration_trades_below_min": "calibration sample too small",
@@ -38,16 +39,22 @@ def _humanize(value: object, default: str = "n/a") -> str:
         "event_pause": "macro event pause",
         "spread_too_wide": "spread too wide",
         "order_not_filled": "order was not filled",
-        "not_in_oanda_open_positions": "not in OANDA open positions",
+        "not_in_oanda_open_positions": "broker sync: OANDA no longer reports this trade open",
+        "broker_reconciliation": "broker sync: OANDA no longer reports this trade open",
         "max_hold_time_stop": "max hold time stop",
         "peak_pullback_profit_lock": "peak pullback profit lock",
+        "peak_pullback_trailing_stop": "peak pullback trailing stop",
+        "stop_loss_order": "broker stop loss order",
+        "take_profit_order": "broker take profit order",
+        "market_order": "broker market close",
+        "trade_close": "broker trade close",
     }
-    if ":" in text:
-        base, detail = text.split(":", 1)
+    if ":" in lookup:
+        base, detail = lookup.split(":", 1)
         if base in mapping:
             detail = detail.replace("<", " < ").replace(">", " > ")
             return f"{mapping[base]} ({detail})"
-    return mapping.get(text, text.replace("_", " "))
+    return mapping.get(lookup, text.replace("_", " ").lower())
 
 
 def _format_time(value: object) -> str:
@@ -68,6 +75,86 @@ def _format_price(value: object) -> str:
         return f"{float(value):.2f}"
     except (TypeError, ValueError):
         return "n/a"
+
+
+def _format_money(value: object, currency: object = None, *, signed: bool = False) -> str:
+    try:
+        amount = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return "n/a"
+    prefix = f"{_safe(str(currency).upper())} " if currency else ""
+    sign = "+" if signed and amount >= 0 else ""
+    return f"{prefix}{sign}{amount:.2f}"
+
+
+def _metadata_from(value: object) -> dict[str, Any]:
+    metadata = getattr(value, "metadata", None)
+    if isinstance(metadata, dict):
+        return metadata
+    if isinstance(value, dict) and isinstance(value.get("metadata"), dict):
+        return value["metadata"]
+    return {}
+
+
+def _currency_from(value: object) -> str | None:
+    metadata = _metadata_from(value)
+    currency = metadata.get("account_currency")
+    if isinstance(value, dict):
+        currency = value.get("currency") or value.get("account_currency") or currency
+    text = str(currency or "").strip().upper()
+    return text or None
+
+
+def _margin_used_from(value: object) -> tuple[float | None, bool]:
+    if isinstance(value, dict):
+        for key in ("margin_used", "entry_budget", "initial_margin_required"):
+            try:
+                amount = float(value.get(key))  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                amount = 0.0
+            if amount > 0:
+                return amount, False
+    metadata = _metadata_from(value)
+    for key in ("estimated_margin_used", "minimum_unit_margin_amount", "risk_amount"):
+        try:
+            amount = float(metadata.get(key))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            amount = 0.0
+        if amount > 0:
+            return amount, True
+    return None, False
+
+
+def _pnl_amount_from(row: dict[str, Any]) -> float | None:
+    for key in ("realized_pl", "unrealized_pl", "unrealizedPL", "pnl", "pnl_amount"):
+        try:
+            return float(row.get(key))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            continue
+    entry_budget, _estimated = _margin_used_from(row)
+    try:
+        current_value = float(row.get("current_value"))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        current_value = 0.0
+    if entry_budget is not None and current_value > 0:
+        return current_value - entry_budget
+    return None
+
+
+def _pnl_pct_from(row: dict[str, Any]) -> float | None:
+    try:
+        return float(row.get("pnl_pct"))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        pass
+    pnl_amount = _pnl_amount_from(row)
+    margin_used, _estimated = _margin_used_from(row)
+    if pnl_amount is None or margin_used is None or margin_used <= 0:
+        return None
+    return pnl_amount / margin_used * 100.0
+
+
+def _estimated_label(estimated: bool) -> str:
+    return " est." if estimated else ""
 
 
 def _format_mode(mode: object) -> str:
@@ -238,12 +325,16 @@ def opportunity_message(opportunity: Opportunity, *, mode: str) -> str:
 
 def order_opened_message(position: IndexPosition) -> str:
     target = _format_price(position.take_profit_price) if position.take_profit_price else "managed exit"
+    currency = _currency_from(position)
+    margin_used, margin_estimated = _margin_used_from(position)
     return "\n".join([
         "🟢 <b>Indices Trade Opened</b>",
         SEPARATOR,
         f"{_format_direction(position.direction)} {_safe(position.symbol)} | {_safe(position.instrument)}",
         f"Strategy: {_format_strategy(position.strategy)}",
         f"Units: {position.units:.2f} | Order units: {position.order_units:.2f}",
+        f"P&L: {_format_money(0.0, currency, signed=True)} (+0.00%)",
+        f"Margin used: {_format_money(margin_used, currency)}{_estimated_label(margin_estimated)}",
         f"Entry: {_format_price(position.entry_price)}",
         f"Stop: {_format_price(position.stop_price)}",
         f"Target: {target}",
@@ -263,22 +354,39 @@ def order_rejected_message(*, symbol: str, direction: str, strategy: str, reason
 
 
 def trade_closed_message(row: dict[str, Any], *, reason: str) -> str:
-    return "\n".join([
+    currency = _currency_from(row)
+    margin_used, margin_estimated = _margin_used_from(row)
+    pnl_amount = _pnl_amount_from(row)
+    pnl_pct = _pnl_pct_from(row)
+    lines = [
         "⚪ <b>Indices Trade Closed</b>",
         SEPARATOR,
         f"{_format_direction(row.get('direction'))} {_safe(row.get('symbol', 'unknown'))} | {_safe(row.get('instrument', 'unknown'))}",
         f"Strategy: {_format_strategy(row.get('strategy'))}",
+        f"P&L: {_format_money(pnl_amount, currency, signed=True)} ({_format_percent(pnl_pct)})",
+        f"Margin used: {_format_money(margin_used, currency)}{_estimated_label(margin_estimated)}",
         f"Reason: {_safe(_humanize(reason))}",
         f"Order ID: {_safe(row.get('order_id', 'unknown'))}",
-    ])
+    ]
+    if row.get("sync_reason") == "not_in_oanda_open_positions":
+        lines.append("Broker sync: OANDA no longer lists this trade as open, so the bot marked its local record closed.")
+        if row.get("broker_close_lookup_error"):
+            lines.append("P&L source: close transaction lookup failed; shown value may be estimated or unavailable.")
+        elif row.get("realized_pl") is None:
+            lines.append("P&L source: close transaction not found yet; shown value may be estimated or unavailable.")
+    return "\n".join(lines)
 
 
 def profit_lock_message(row: dict[str, Any]) -> str:
+    currency = _currency_from(row)
+    margin_used, margin_estimated = _margin_used_from(row)
+    pnl_amount = _pnl_amount_from(row)
     return "\n".join([
         "💰 <b>Indices Profit Taken</b>",
         SEPARATOR,
         f"{_format_direction(row.get('direction'))} {_safe(row.get('symbol', 'unknown'))} | {_safe(row.get('instrument', 'unknown'))}",
-        f"P&L: {_format_percent(row.get('pnl_pct'))} | Peak: {_format_percent(row.get('peak_pnl_pct'))}",
+        f"P&L: {_format_money(pnl_amount, currency, signed=True)} ({_format_percent(row.get('pnl_pct'))}) | Peak: {_format_percent(row.get('peak_pnl_pct'))}",
+        f"Margin used: {_format_money(margin_used, currency)}{_estimated_label(margin_estimated)}",
         f"Pullback: {_format_points(row.get('pullback_from_peak_pct'))} pts",
         f"Order ID: {_safe(row.get('order_id', 'unknown'))}",
     ])

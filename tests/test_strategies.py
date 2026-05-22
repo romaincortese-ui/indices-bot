@@ -60,3 +60,15 @@ def test_default_strategy_allow_list_excludes_event_momentum() -> None:
 
     assert all(item.strategy != "EVENT_MOMENTUM" for item in opportunities)
     assert "EVENT_MOMENTUM:disabled" in reasons
+
+
+def test_disabled_strategy_lane_excludes_default_spx_short_orb() -> None:
+    config = IndicesConfig.from_env()
+    quote = IndexQuote("SPX500", "SPX500_USD", 91, 91.1, 91.05, 0.1, True, "tradeable", datetime.now(timezone.utc))
+    regime = MarketRegime("SPX500", "US", "BEAR", "NORMAL", "MIXED", "US_CASH_OPEN")
+    reasons: list[str] = []
+
+    opportunities = evaluate_all(config, "SPX500", "SPX500_USD", quote, _candles("DOWN"), _candles("DOWN"), _candles("DOWN"), regime, {}, reasons)
+
+    assert all(not (item.strategy == "OPENING_RANGE_BREAKOUT" and item.direction == "SHORT") for item in opportunities)
+    assert "OPENING_RANGE_BREAKOUT:short_lane_disabled" in reasons

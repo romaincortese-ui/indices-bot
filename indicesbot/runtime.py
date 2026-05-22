@@ -105,7 +105,7 @@ class IndicesRuntime:
         self._service_telegram(state)
         closed = self._sync_closed_positions(state)
         for row in closed:
-            self.telegram.send(trade_closed_message(row, reason="not_in_oanda_open_positions"))
+            self.telegram.send(trade_closed_message(row, reason=str(row.get("exit_reason") or "not_in_oanda_open_positions")))
         time_stopped = self._apply_time_stop(state, now)
         for row in time_stopped:
             self.telegram.send(trade_closed_message(row, reason="max_hold_time_stop"))
@@ -260,12 +260,59 @@ class IndicesRuntime:
         rows = state.get("open_positions", []) if isinstance(state.get("open_positions"), list) else []
         if self.config.paper_trade or not self.config.has_oanda_credentials:
             return []
-        open_instruments = self.client.open_positions()
-        kept = [row for row in rows if str(row.get("instrument", "")).upper() in open_instruments]
-        closed = [row for row in rows if row not in kept]
+        open_trade_ids: set[str] = set()
+        open_instruments: set[str] = set()
+        used_trade_snapshot = False
+        try:
+            trades = self.client.open_trades()
+            used_trade_snapshot = True
+            for trade in trades if isinstance(trades, list) else []:
+                if not isinstance(trade, dict):
+                    continue
+                trade_id = str(trade.get("id") or "").strip()
+                if trade_id:
+                    open_trade_ids.add(trade_id)
+                units = _float_or_none(trade.get("currentUnits"))
+                instrument = str(trade.get("instrument") or "").strip().upper()
+                if instrument and (units is None or units != 0.0):
+                    open_instruments.add(instrument)
+        except AttributeError:
+            used_trade_snapshot = False
+        except Exception as exc:
+            state["last_closed_position_sync_error"] = str(exc)[:200]
+            log.warning("closed_position_sync_failed stage=open_trades error=%s", exc)
+            return []
+        if not used_trade_snapshot:
+            try:
+                open_instruments = self.client.open_positions()
+            except Exception as exc:
+                state["last_closed_position_sync_error"] = str(exc)[:200]
+                log.warning("closed_position_sync_failed stage=open_positions error=%s", exc)
+                return []
+        kept: list[dict[str, Any]] = []
+        closed: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            trade_id = str(row.get("order_id") or "").strip()
+            instrument = str(row.get("instrument") or "").strip().upper()
+            if used_trade_snapshot and trade_id:
+                is_open = trade_id in open_trade_ids
+            else:
+                is_open = bool(instrument and instrument in open_instruments)
+            if is_open:
+                kept.append(row)
+            else:
+                closed.append(row)
         state["open_positions"] = kept
+        closed_at = datetime.now(timezone.utc).isoformat()
         for row in closed:
-            state.setdefault("events", []).append({"type": "trade_closed", "symbol": row.get("symbol"), "order_id": row.get("order_id"), "at": datetime.now(timezone.utc).isoformat()})
+            trade_id = str(row.get("order_id") or "").strip()
+            row["closed_at"] = closed_at
+            row["sync_reason"] = "not_in_oanda_open_positions"
+            row.setdefault("exit_reason", "broker_reconciliation")
+            self._enrich_row_from_recent_close(row, trade_id)
+            state.setdefault("events", []).append({"type": "trade_closed", "reason": row.get("exit_reason"), "sync_reason": row.get("sync_reason"), "symbol": row.get("symbol"), "order_id": row.get("order_id"), "realized_pl": row.get("realized_pl"), "at": closed_at})
         return closed
 
     def _apply_time_stop(self, state: dict[str, Any], now: datetime) -> list[dict[str, Any]]:
@@ -297,7 +344,8 @@ class IndicesRuntime:
             trade_id = str(row.get("order_id") or "")
             if broker_available and trade_id:
                 try:
-                    self.client.close_trade(trade_id)
+                    close_response = self.client.close_trade(trade_id)
+                    self._enrich_row_from_close(row, close_response)
                 except RuntimeError as exc:
                     log.warning("time_stop_close_failed instrument=%s order_id=%s error=%s", row.get("instrument"), trade_id, exc)
                     kept.append(row)
@@ -375,7 +423,8 @@ class IndicesRuntime:
                 continue
             if broker_available:
                 try:
-                    self.client.close_trade(trade_id)
+                    close_response = self.client.close_trade(trade_id)
+                    self._enrich_row_from_close(row, close_response)
                 except RuntimeError as exc:
                     errors.append({"symbol": row.get("symbol") or instrument, "instrument": instrument, "stage": "profit_lock_close", "error": str(exc)})
                     kept_rows.append(row)
@@ -413,6 +462,51 @@ class IndicesRuntime:
             row["order_units"] = units
             row["units"] = abs(units)
             row["direction"] = "LONG" if units > 0 else "SHORT"
+
+    def _enrich_row_from_recent_close(self, row: dict[str, Any], trade_id: str) -> None:
+        if not trade_id or not hasattr(self.client, "recent_trade_close"):
+            return
+        try:
+            close = self.client.recent_trade_close(trade_id)
+        except Exception as exc:
+            row["broker_close_lookup_error"] = str(exc)[:200]
+            log.info("trade_close_lookup_failed instrument=%s order_id=%s error=%s", row.get("instrument"), trade_id, exc)
+            return
+        if isinstance(close, dict):
+            self._enrich_row_from_close(row, close)
+
+    def _enrich_row_from_close(self, row: dict[str, Any], close: dict[str, object]) -> None:
+        transaction = close.get("orderFillTransaction") if isinstance(close.get("orderFillTransaction"), dict) else close
+        if not isinstance(transaction, dict):
+            return
+        reason = str(transaction.get("reason") or "").strip().lower()
+        if reason:
+            row["exit_reason"] = reason
+            row["broker_close_reason"] = reason
+        closed_at = transaction.get("time")
+        if closed_at:
+            row["closed_at"] = str(closed_at).replace("Z", "+00:00")
+        price = _float_or_none(transaction.get("price"))
+        if price is not None and price > 0:
+            row["exit_price"] = price
+            row["close_price"] = price
+        close_parts = _trade_close_parts(transaction)
+        realized_values = [_float_or_none(part.get("realizedPL")) for part in close_parts]
+        if not any(value is not None for value in realized_values):
+            realized_values = [_float_or_none(transaction.get("pl"))]
+        realized = sum(value for value in realized_values if value is not None)
+        if any(value is not None for value in realized_values):
+            row["realized_pl"] = realized
+            row["unrealized_pl"] = realized
+            entry_budget = _position_entry_budget(row)
+            if entry_budget is not None and entry_budget > 0:
+                row["pnl_pct"] = realized / entry_budget * 100.0
+        financing_values = [_float_or_none(part.get("financing")) for part in close_parts]
+        if any(value is not None for value in financing_values):
+            row["financing"] = sum(value for value in financing_values if value is not None)
+        spread_values = [_float_or_none(part.get("halfSpreadCost")) for part in close_parts]
+        if any(value is not None for value in spread_values):
+            row["half_spread_cost"] = sum(value for value in spread_values if value is not None)
 
     def _service_telegram(self, state: dict[str, Any]) -> None:
         if not self.telegram.enabled:
@@ -474,6 +568,19 @@ def _float_or_none(value: object) -> float | None:
         return float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return None
+
+
+def _trade_close_parts(transaction: dict[str, object]) -> list[dict[str, object]]:
+    parts: list[dict[str, object]] = []
+    for key in ("tradesClosed", "tradesReduced"):
+        rows = transaction.get(key)
+        if isinstance(rows, list):
+            parts.extend(row for row in rows if isinstance(row, dict))
+    for key in ("tradeClosed", "tradeReduced"):
+        row = transaction.get(key)
+        if isinstance(row, dict):
+            parts.append(row)
+    return parts
 
 
 def _position_entry_budget(row: dict[str, Any]) -> float | None:

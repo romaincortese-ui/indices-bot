@@ -16,6 +16,26 @@ def apply_regime(opportunity: Opportunity, regime: MarketRegime) -> Opportunity:
     return replace(opportunity, score=opportunity.score + offset, risk_multiplier=opportunity.risk_multiplier * regime.risk_multiplier)
 
 
+def strategy_lane_disabled(config: IndicesConfig, symbol: str, strategy: str, direction: str) -> bool:
+    disabled = {str(item).strip().upper() for item in getattr(config, "disabled_strategy_lanes", ()) if str(item).strip()}
+    if not disabled:
+        return False
+    symbol = symbol.upper()
+    strategy = strategy.upper()
+    direction = direction.upper()
+    candidates = {
+        f"{symbol}:{strategy}:{direction}",
+        f"{symbol}:{strategy}:*",
+        f"{symbol}:*:{direction}",
+        f"*:{strategy}:{direction}",
+        f"{symbol}:*:*",
+        f"*:{strategy}:*",
+        f"*:*:{direction}",
+        "*:*:*",
+    }
+    return bool(disabled & candidates)
+
+
 def evaluate_all(config: IndicesConfig, symbol: str, instrument: str, quote: IndexQuote, candles_m15: list[Candle], candles_h1: list[Candle], candles_h4: list[Candle], regime: MarketRegime, macro_state: dict, reasons: list[str]) -> list[Opportunity]:
     opportunities: list[Opportunity] = []
     enabled = {strategy.upper() for strategy in getattr(config, "enabled_strategies", ())}
@@ -30,6 +50,9 @@ def evaluate_all(config: IndicesConfig, symbol: str, instrument: str, quote: Ind
             reasons.append(f"{strategy_name}:disabled")
             continue
         for direction in ("LONG", "SHORT"):
+            if strategy_lane_disabled(config, symbol, strategy_name, direction):
+                reasons.append(f"{strategy_name}:{direction.lower()}_lane_disabled")
+                continue
             opportunity = scorer(config, symbol, instrument, direction, quote, candles_m15, candles_h1, candles_h4, regime, macro_state, reasons)
             if opportunity is not None:
                 opportunities.append(apply_regime(opportunity, regime))

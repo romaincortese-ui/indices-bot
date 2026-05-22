@@ -13,6 +13,10 @@ def test_config_defaults_safe(monkeypatch) -> None:
     assert "SPX500" in config.universe
     assert config.oanda_instrument_for("DE40") == "DE30_EUR"
     assert config.enabled_strategies == ("TREND_PULLBACK", "OPENING_RANGE_BREAKOUT")
+    assert config.disabled_strategy_lanes == (
+        "SPX500:OPENING_RANGE_BREAKOUT:SHORT",
+        "US30:OPENING_RANGE_BREAKOUT:SHORT",
+    )
     assert config.require_calibration_for_trading is True
     assert config.startup_message_cooldown_minutes == 30
     assert config.risk_on_enabled_strategies == ("OPENING_RANGE_BREAKOUT",)
@@ -49,6 +53,20 @@ def test_enabled_strategies_env(monkeypatch) -> None:
     config = IndicesConfig.from_env()
 
     assert config.enabled_strategies == ("TREND_PULLBACK", "EVENT_MOMENTUM")
+
+
+def test_disabled_strategy_lanes_env_can_override_and_clear(monkeypatch) -> None:
+    monkeypatch.setenv("INDICES_DISABLED_STRATEGY_LANES", "nas100:trend_pullback:long")
+
+    config = IndicesConfig.from_env()
+
+    assert config.disabled_strategy_lanes == ("NAS100:TREND_PULLBACK:LONG",)
+
+    monkeypatch.setenv("INDICES_DISABLED_STRATEGY_LANES", "none")
+
+    config = IndicesConfig.from_env()
+
+    assert config.disabled_strategy_lanes == ()
 
 
 def test_risk_off_aggressive_env(monkeypatch) -> None:

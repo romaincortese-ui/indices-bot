@@ -66,6 +66,28 @@ class MarketDataErrorClient(Client):
         raise RuntimeError("OANDA request failed: {'errorMessage': 'Invalid Instrument BAD'}")
 
 
+class SyncClient:
+    def open_trades(self):
+        return [{"id": "T2", "instrument": "NAS100_USD", "currentUnits": "0.01"}]
+
+    def recent_trade_close(self, trade_id):
+        if trade_id != "T1":
+            return None
+        return {
+            "id": "99",
+            "type": "ORDER_FILL",
+            "reason": "STOP_LOSS_ORDER",
+            "price": "5012.3",
+            "time": "2026-05-22T13:46:10.000000000Z",
+            "tradesClosed": [{"tradeID": "T1", "realizedPL": "-1.25", "financing": "-0.02", "halfSpreadCost": "0.01"}],
+        }
+
+
+class FailingSyncClient:
+    def open_trades(self):
+        raise ConnectionError("Remote end closed connection without response")
+
+
 class Telegram:
     enabled = False
 
@@ -261,3 +283,37 @@ def test_time_stop_closes_aged_paper_position(tmp_path, monkeypatch) -> None:
 
     assert [row["order_id"] for row in stopped] == ["P1"]
     assert [row["order_id"] for row in state["open_positions"]] == ["P2"]
+
+
+def test_closed_position_sync_uses_trade_ids_and_enriches_close(tmp_path, monkeypatch) -> None:
+    config = _live_config(tmp_path, monkeypatch)
+    runtime = IndicesRuntime(config, client=SyncClient(), telegram=Telegram())
+    state = {
+        "open_positions": [
+            {"symbol": "SPX500", "instrument": "SPX500_USD", "direction": "LONG", "order_id": "T1", "margin_used": 100.0},
+            {"symbol": "NAS100", "instrument": "NAS100_USD", "direction": "LONG", "order_id": "T2", "margin_used": 150.0},
+        ],
+        "events": [],
+    }
+
+    closed = runtime._sync_closed_positions(state)
+
+    assert [row["order_id"] for row in state["open_positions"]] == ["T2"]
+    assert [row["order_id"] for row in closed] == ["T1"]
+    assert closed[0]["exit_reason"] == "stop_loss_order"
+    assert closed[0]["sync_reason"] == "not_in_oanda_open_positions"
+    assert closed[0]["realized_pl"] == -1.25
+    assert closed[0]["pnl_pct"] == -1.25
+    assert state["events"][0]["reason"] == "stop_loss_order"
+
+
+def test_closed_position_sync_does_not_crash_on_transient_oanda_disconnect(tmp_path, monkeypatch) -> None:
+    config = _live_config(tmp_path, monkeypatch)
+    runtime = IndicesRuntime(config, client=FailingSyncClient(), telegram=Telegram())
+    state = {"open_positions": [{"symbol": "SPX500", "instrument": "SPX500_USD", "order_id": "T1"}]}
+
+    closed = runtime._sync_closed_positions(state)
+
+    assert closed == []
+    assert state["open_positions"][0]["order_id"] == "T1"
+    assert "Remote end closed connection" in state["last_closed_position_sync_error"]

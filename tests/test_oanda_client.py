@@ -26,6 +26,11 @@ class Session:
             return Response(payload={"instruments": self.instruments})
         if url.endswith("/orders"):
             return Response(payload={"orderFillTransaction": {"id": "10", "price": "5100.1", "tradeOpened": {"tradeID": "99"}}})
+        if "/transactions?" in url:
+            return Response(payload={"transactions": [
+                {"id": "98", "type": "ORDER_FILL", "tradesClosed": [{"tradeID": "158", "realizedPL": "1.20"}]},
+                {"id": "99", "type": "ORDER_FILL", "reason": "STOP_LOSS_ORDER", "tradesClosed": [{"tradeID": "159", "realizedPL": "-2.10"}]},
+            ]})
         return Response(payload={})
 
 
@@ -84,3 +89,21 @@ def test_live_order_formats_fractional_units(monkeypatch) -> None:
     body = json.loads(session.calls[-1][2]["data"])
     assert details.minimum_trade_size == 0.01
     assert body["order"]["units"] == "0.01"
+
+
+def test_recent_trade_close_finds_matching_order_fill(monkeypatch) -> None:
+    monkeypatch.setenv("OANDA_ACCOUNT_ID", "acct")
+    monkeypatch.setenv("OANDA_API_TOKEN", "token")
+    monkeypatch.setenv("PAPER_TRADE", "false")
+    monkeypatch.setenv("LIVE_TRADING_ENABLED", "true")
+    monkeypatch.setenv("EXECUTION_MODE", "paper")
+    config = IndicesConfig.from_env()
+    session = Session()
+    client = OandaClient(config, session=session)
+
+    close = client.recent_trade_close("159")
+
+    assert close is not None
+    assert close["reason"] == "STOP_LOSS_ORDER"
+    assert close["tradesClosed"][0]["realizedPL"] == "-2.10"
+    assert "/transactions?" in session.calls[-1][1]

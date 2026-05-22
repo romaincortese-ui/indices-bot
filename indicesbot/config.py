@@ -18,6 +18,10 @@ if load_dotenv is not None and find_dotenv is not None:
 
 DEFAULT_UNIVERSE = ("SPX500", "NAS100", "US30", "UK100", "DE40", "EU50", "FR40", "JP225", "HK33", "AU200")
 DEFAULT_ENABLED_STRATEGIES = ("TREND_PULLBACK", "OPENING_RANGE_BREAKOUT")
+DEFAULT_DISABLED_STRATEGY_LANES = (
+    "SPX500:OPENING_RANGE_BREAKOUT:SHORT",
+    "US30:OPENING_RANGE_BREAKOUT:SHORT",
+)
 
 REGION_BUCKETS = {
     "SPX500": "US",
@@ -81,6 +85,16 @@ def env_csv(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
     return values or default
 
 
+def env_csv_with_clear(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    raw = env_str(name)
+    if not raw:
+        return default
+    values = tuple(part.strip().upper() for part in re.split(r"[,\s]+", raw) if part.strip())
+    if len(values) == 1 and values[0] in {"NONE", "OFF", "FALSE", "0"}:
+        return ()
+    return values or default
+
+
 @dataclass(frozen=True, slots=True)
 class IndicesConfig:
     oanda_env: str
@@ -135,6 +149,7 @@ class IndicesConfig:
     max_hold_bars: int
     bar_minutes: int
     enabled_strategies: tuple[str, ...]
+    disabled_strategy_lanes: tuple[str, ...]
     require_calibration_for_trading: bool
     calibration_min_trades: int
     calibration_min_groups: int
@@ -225,6 +240,7 @@ class IndicesConfig:
             max_hold_bars=env_int("INDICES_MAX_HOLD_BARS", 12),
             bar_minutes=env_int("INDICES_BAR_MINUTES", 15),
             enabled_strategies=env_csv("INDICES_ENABLED_STRATEGIES", DEFAULT_ENABLED_STRATEGIES),
+            disabled_strategy_lanes=env_csv_with_clear("INDICES_DISABLED_STRATEGY_LANES", DEFAULT_DISABLED_STRATEGY_LANES),
             require_calibration_for_trading=env_bool("INDICES_REQUIRE_CALIBRATION", True),
             calibration_min_trades=env_int("INDICES_CALIBRATION_MIN_TRADES", 30),
             calibration_min_groups=env_int("INDICES_CALIBRATION_MIN_GROUPS", 1),

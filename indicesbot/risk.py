@@ -50,6 +50,7 @@ def position_from_opportunity(opportunity: Opportunity, config: IndicesConfig, a
             min_unit_floor_applied = True
     signed_units = units if opportunity.direction == "LONG" else -units
     actual_risk_amount = units * per_unit_risk
+    estimated_margin_used = units * margin_per_unit
     return IndexPosition(
         symbol=opportunity.symbol,
         instrument=opportunity.instrument,
@@ -71,6 +72,11 @@ def position_from_opportunity(opportunity: Opportunity, config: IndicesConfig, a
             "target_risk_nav_pct": target_risk_nav_pct,
             "nav_at_entry": nav,
             "raw_units": raw_units,
+            "margin_per_unit": margin_per_unit,
+            "estimated_margin_used": estimated_margin_used,
+            "margin_rate": max(details.margin_rate, 0.0001),
+            "home_conversion_factor": max(conversion_factor, 0.0001),
+            "account_currency": account.currency,
             "max_units_by_margin": max_units_by_margin,
             "minimum_trade_size": minimum_trade_size,
             "unit_step": unit_step,
