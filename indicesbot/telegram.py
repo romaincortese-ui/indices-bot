@@ -153,6 +153,68 @@ def _pnl_pct_from(row: dict[str, Any]) -> float | None:
     return pnl_amount / margin_used * 100.0
 
 
+def _risk_amount_from(value: object) -> float | None:
+    if isinstance(value, dict):
+        for key in ("risk_amount", "actual_risk_amount", "stop_risk_amount"):
+            try:
+                amount = float(value.get(key))  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                amount = 0.0
+            if amount > 0:
+                return amount
+    metadata = _metadata_from(value)
+    for key in ("risk_amount", "actual_risk_amount", "stop_risk_amount"):
+        try:
+            amount = float(metadata.get(key))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            amount = 0.0
+        if amount > 0:
+            return amount
+    if isinstance(value, dict):
+        entry_price_raw = value.get("entry_price")
+        stop_price_raw = value.get("stop_price")
+        units_raw = value.get("units")
+    else:
+        entry_price_raw = getattr(value, "entry_price", None)
+        stop_price_raw = getattr(value, "stop_price", None)
+        units_raw = getattr(value, "units", None)
+    try:
+        entry_price = float(entry_price_raw)  # type: ignore[arg-type]
+        stop_price = float(stop_price_raw)  # type: ignore[arg-type]
+        units = abs(float(units_raw))  # type: ignore[arg-type]
+        conversion_factor = float(metadata.get("home_conversion_factor", 1.0) or 1.0)
+    except (TypeError, ValueError):
+        return None
+    if entry_price > 0 and stop_price > 0 and units > 0:
+        return abs(entry_price - stop_price) * units * max(conversion_factor, 0.0001)
+    return None
+
+
+def _risk_nav_pct_from(value: object) -> float | None:
+    metadata = _metadata_from(value)
+    try:
+        amount = float(metadata.get("risk_nav_pct")) * 100.0  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        amount = 0.0
+    if amount > 0:
+        return amount
+    risk_amount = _risk_amount_from(value)
+    try:
+        nav = float(metadata.get("nav_at_entry"))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        nav = 0.0
+    if risk_amount is not None and nav > 0:
+        return risk_amount / nav * 100.0
+    return None
+
+
+def _risk_context(value: object, currency: object) -> str:
+    risk_amount = _risk_amount_from(value)
+    risk_nav_pct = _risk_nav_pct_from(value)
+    nav_text = f" ({_format_percent(risk_nav_pct)} NAV)" if risk_nav_pct is not None else ""
+    return f"Risk at stop: {_format_money(risk_amount, currency)}{nav_text}"
+
+
 def _estimated_label(estimated: bool) -> str:
     return " est." if estimated else ""
 
@@ -302,8 +364,16 @@ def status_message(state: dict[str, Any]) -> str:
             if not isinstance(row, dict):
                 continue
             target = _format_price(row.get("take_profit_price")) if row.get("take_profit_price") else "managed exit"
+            currency = _currency_from(row)
+            margin_used, margin_estimated = _margin_used_from(row)
+            pnl_amount = _pnl_amount_from(row)
+            pnl_pct = _pnl_pct_from(row)
             lines.append(f"{_format_direction(row.get('direction'))} <b>{_safe(row.get('symbol', '?'))}</b> | {_format_strategy(row.get('strategy'))}")
             lines.append(f"Entry {_format_price(row.get('entry_price'))} | Stop {_format_price(row.get('stop_price'))} | Target {target}")
+            lines.append(
+                f"P&L {_format_money(pnl_amount, currency, signed=True)} ({_format_percent(pnl_pct)} of margin) | "
+                f"Margin {_format_money(margin_used, currency)}{_estimated_label(margin_estimated)} | {_risk_context(row, currency)}"
+            )
     return "\n".join(lines)
 
 
@@ -333,8 +403,9 @@ def order_opened_message(position: IndexPosition) -> str:
         f"{_format_direction(position.direction)} {_safe(position.symbol)} | {_safe(position.instrument)}",
         f"Strategy: {_format_strategy(position.strategy)}",
         f"Units: {position.units:.2f} | Order units: {position.order_units:.2f}",
-        f"P&L: {_format_money(0.0, currency, signed=True)} (+0.00%)",
+        f"P&L: {_format_money(0.0, currency, signed=True)} (+0.00% of margin)",
         f"Margin used: {_format_money(margin_used, currency)}{_estimated_label(margin_estimated)}",
+        _risk_context(position, currency),
         f"Entry: {_format_price(position.entry_price)}",
         f"Stop: {_format_price(position.stop_price)}",
         f"Target: {target}",
@@ -363,8 +434,9 @@ def trade_closed_message(row: dict[str, Any], *, reason: str) -> str:
         SEPARATOR,
         f"{_format_direction(row.get('direction'))} {_safe(row.get('symbol', 'unknown'))} | {_safe(row.get('instrument', 'unknown'))}",
         f"Strategy: {_format_strategy(row.get('strategy'))}",
-        f"P&L: {_format_money(pnl_amount, currency, signed=True)} ({_format_percent(pnl_pct)})",
+        f"P&L: {_format_money(pnl_amount, currency, signed=True)} ({_format_percent(pnl_pct)} of margin)",
         f"Margin used: {_format_money(margin_used, currency)}{_estimated_label(margin_estimated)}",
+        _risk_context(row, currency),
         f"Reason: {_safe(_humanize(reason))}",
         f"Order ID: {_safe(row.get('order_id', 'unknown'))}",
     ]
@@ -385,8 +457,9 @@ def profit_lock_message(row: dict[str, Any]) -> str:
         "💰 <b>Indices Profit Taken</b>",
         SEPARATOR,
         f"{_format_direction(row.get('direction'))} {_safe(row.get('symbol', 'unknown'))} | {_safe(row.get('instrument', 'unknown'))}",
-        f"P&L: {_format_money(pnl_amount, currency, signed=True)} ({_format_percent(row.get('pnl_pct'))}) | Peak: {_format_percent(row.get('peak_pnl_pct'))}",
+        f"P&L: {_format_money(pnl_amount, currency, signed=True)} ({_format_percent(row.get('pnl_pct'))} of margin) | Peak: {_format_percent(row.get('peak_pnl_pct'))}",
         f"Margin used: {_format_money(margin_used, currency)}{_estimated_label(margin_estimated)}",
+        _risk_context(row, currency),
         f"Pullback: {_format_points(row.get('pullback_from_peak_pct'))} pts",
         f"Order ID: {_safe(row.get('order_id', 'unknown'))}",
     ])
