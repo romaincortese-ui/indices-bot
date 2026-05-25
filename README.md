@@ -56,12 +56,14 @@ EXECUTION_MODE=paper
 PAPER_TRADE=true
 LIVE_TRADING_ENABLED=false
 INDICES_ENABLED_STRATEGIES=TREND_PULLBACK,OPENING_RANGE_BREAKOUT
-INDICES_DISABLED_STRATEGY_LANES=SPX500:OPENING_RANGE_BREAKOUT:SHORT,US30:OPENING_RANGE_BREAKOUT:SHORT
+INDICES_DISABLED_STRATEGY_LANES=SPX500:OPENING_RANGE_BREAKOUT:SHORT,NAS100:OPENING_RANGE_BREAKOUT:SHORT,US30:OPENING_RANGE_BREAKOUT:SHORT
 INDICES_REQUIRE_CALIBRATION=true
+INDICES_US_HOLIDAY_ORB_BLOCK_ENABLED=true
+INDICES_SAME_LANE_STOP_COOLDOWN_MINUTES=90
 ```
 
 `MEAN_REVERSION` and `EVENT_MOMENTUM` remain available in code, but they are disabled by default until they pass walk-forward validation on OANDA practice data. Paper/live entries also require a calibration payload with enough sample trades.
-The default disabled lane list skips weak US benchmark opening-range shorts identified in 30-day online-data validation; set `INDICES_DISABLED_STRATEGY_LANES=none` to clear it for research runs.
+The default disabled lane list skips weak US benchmark opening-range shorts identified in 30-day online-data validation; set `INDICES_DISABLED_STRATEGY_LANES=none` to clear it for research runs. US index opening-range trades are also blocked on US equity-market holidays and early closes, and a stopped lane must cool down before the same symbol/strategy/direction can re-enter.
 
 For live trading, all three must be set deliberately:
 

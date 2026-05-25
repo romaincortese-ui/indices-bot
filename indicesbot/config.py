@@ -20,6 +20,7 @@ DEFAULT_UNIVERSE = ("SPX500", "NAS100", "US30", "UK100", "DE40", "EU50", "FR40",
 DEFAULT_ENABLED_STRATEGIES = ("TREND_PULLBACK", "OPENING_RANGE_BREAKOUT")
 DEFAULT_DISABLED_STRATEGY_LANES = (
     "SPX500:OPENING_RANGE_BREAKOUT:SHORT",
+    "NAS100:OPENING_RANGE_BREAKOUT:SHORT",
     "US30:OPENING_RANGE_BREAKOUT:SHORT",
 )
 
@@ -150,12 +151,18 @@ class IndicesConfig:
     bar_minutes: int
     enabled_strategies: tuple[str, ...]
     disabled_strategy_lanes: tuple[str, ...]
+    us_holiday_orb_block_enabled: bool
+    same_lane_stop_cooldown_minutes: int
     require_calibration_for_trading: bool
     calibration_min_trades: int
     calibration_min_groups: int
     profit_lock_enabled: bool
     profit_lock_trigger_pct: float
     profit_lock_pullback_pct: float
+    no_progress_exit_enabled: bool
+    no_progress_min_bars: int
+    no_progress_min_peak_r: float
+    no_progress_loss_r: float
     max_entry_spread_atr: float
     adaptive_spread_enabled: bool
     adaptive_spread_window_minutes: int
@@ -241,6 +248,8 @@ class IndicesConfig:
             bar_minutes=env_int("INDICES_BAR_MINUTES", 15),
             enabled_strategies=env_csv("INDICES_ENABLED_STRATEGIES", DEFAULT_ENABLED_STRATEGIES),
             disabled_strategy_lanes=env_csv_with_clear("INDICES_DISABLED_STRATEGY_LANES", DEFAULT_DISABLED_STRATEGY_LANES),
+            us_holiday_orb_block_enabled=env_bool("INDICES_US_HOLIDAY_ORB_BLOCK_ENABLED", True),
+            same_lane_stop_cooldown_minutes=max(0, env_int("INDICES_SAME_LANE_STOP_COOLDOWN_MINUTES", 90)),
             require_calibration_for_trading=env_bool("INDICES_REQUIRE_CALIBRATION", True),
             calibration_min_trades=env_int("INDICES_CALIBRATION_MIN_TRADES", 30),
             calibration_min_groups=env_int("INDICES_CALIBRATION_MIN_GROUPS", 1),
@@ -250,6 +259,10 @@ class IndicesConfig:
             profit_lock_enabled=env_bool("PROFIT_LOCK_ENABLED", True),
             profit_lock_trigger_pct=env_float("PROFIT_LOCK_TRIGGER_PCT", 15.0),
             profit_lock_pullback_pct=env_float("PROFIT_LOCK_PULLBACK_PCT", 2.0),
+            no_progress_exit_enabled=env_bool("INDICES_NO_PROGRESS_EXIT_ENABLED", True),
+            no_progress_min_bars=env_int("INDICES_NO_PROGRESS_MIN_BARS", 8),
+            no_progress_min_peak_r=env_float("INDICES_NO_PROGRESS_MIN_PEAK_R", 0.08),
+            no_progress_loss_r=env_float("INDICES_NO_PROGRESS_LOSS_R", 0.35),
             max_entry_spread_atr=env_float("MAX_ENTRY_SPREAD_ATR", 0.08),
             adaptive_spread_enabled=env_bool("ADAPTIVE_SPREAD_ENABLED", True),
             adaptive_spread_window_minutes=env_int("ADAPTIVE_SPREAD_WINDOW_MINUTES", 30),

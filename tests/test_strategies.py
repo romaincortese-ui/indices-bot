@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 from indicesbot.config import IndicesConfig
@@ -64,7 +65,7 @@ def test_default_strategy_allow_list_excludes_event_momentum() -> None:
 
 def test_disabled_strategy_lane_excludes_default_spx_short_orb() -> None:
     config = IndicesConfig.from_env()
-    quote = IndexQuote("SPX500", "SPX500_USD", 91, 91.1, 91.05, 0.1, True, "tradeable", datetime.now(timezone.utc))
+    quote = IndexQuote("SPX500", "SPX500_USD", 91, 91.1, 91.05, 0.1, True, "tradeable", datetime(2026, 5, 26, 14, 45, tzinfo=timezone.utc))
     regime = MarketRegime("SPX500", "US", "BEAR", "NORMAL", "MIXED", "US_CASH_OPEN")
     reasons: list[str] = []
 
@@ -72,3 +73,27 @@ def test_disabled_strategy_lane_excludes_default_spx_short_orb() -> None:
 
     assert all(not (item.strategy == "OPENING_RANGE_BREAKOUT" and item.direction == "SHORT") for item in opportunities)
     assert "OPENING_RANGE_BREAKOUT:short_lane_disabled" in reasons
+
+
+def test_disabled_strategy_lane_excludes_default_nas100_short_orb() -> None:
+    config = IndicesConfig.from_env()
+    quote = IndexQuote("NAS100", "NAS100_USD", 91, 91.1, 91.05, 0.1, True, "tradeable", datetime(2026, 5, 26, 14, 45, tzinfo=timezone.utc))
+    regime = MarketRegime("NAS100", "US", "BEAR", "NORMAL", "MIXED", "US_CASH_OPEN")
+    reasons: list[str] = []
+
+    opportunities = evaluate_all(config, "NAS100", "NAS100_USD", quote, _candles("DOWN"), _candles("DOWN"), _candles("DOWN"), regime, {}, reasons)
+
+    assert all(not (item.strategy == "OPENING_RANGE_BREAKOUT" and item.direction == "SHORT") for item in opportunities)
+    assert "OPENING_RANGE_BREAKOUT:short_lane_disabled" in reasons
+
+
+def test_us_holiday_blocks_us_index_opening_range() -> None:
+    config = replace(IndicesConfig.from_env(), enabled_strategies=("OPENING_RANGE_BREAKOUT",), disabled_strategy_lanes=())
+    quote = IndexQuote("SPX500", "SPX500_USD", 109, 109.1, 109.05, 0.1, True, "tradeable", datetime(2026, 5, 25, 14, 45, tzinfo=timezone.utc))
+    regime = MarketRegime("SPX500", "US", "BULL", "NORMAL", "MIXED", "US_CASH_OPEN")
+    reasons: list[str] = []
+
+    opportunities = evaluate_all(config, "SPX500", "SPX500_USD", quote, _candles("UP"), _candles("UP"), _candles("UP"), regime, {}, reasons)
+
+    assert opportunities == []
+    assert "OPENING_RANGE_BREAKOUT:us_market_holiday" in reasons

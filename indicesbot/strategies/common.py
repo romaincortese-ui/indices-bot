@@ -9,6 +9,7 @@ from indicesbot.strategies.event_momentum import score_event_momentum
 from indicesbot.strategies.mean_reversion import score_mean_reversion
 from indicesbot.strategies.opening_range_breakout import score_opening_range_breakout
 from indicesbot.strategies.trend_pullback import score_trend_pullback
+from indicesbot.trading_calendar import opening_range_calendar_block
 
 
 def apply_regime(opportunity: Opportunity, regime: MarketRegime) -> Opportunity:
@@ -48,6 +49,15 @@ def evaluate_all(config: IndicesConfig, symbol: str, instrument: str, quote: Ind
     for strategy_name, scorer in scorers:
         if enabled and strategy_name not in enabled:
             reasons.append(f"{strategy_name}:disabled")
+            continue
+        calendar_block = opening_range_calendar_block(
+            symbol,
+            strategy_name,
+            quote.time,
+            enabled=getattr(config, "us_holiday_orb_block_enabled", True),
+        )
+        if calendar_block:
+            reasons.append(f"{strategy_name}:{calendar_block}")
             continue
         for direction in ("LONG", "SHORT"):
             if strategy_lane_disabled(config, symbol, strategy_name, direction):

@@ -4,7 +4,7 @@ import json
 
 from indicesbot.config import IndicesConfig
 from indicesbot.models import AccountSummary, Candle, IndexQuote, InstrumentDetails
-from indicesbot.runtime import IndicesRuntime
+from indicesbot.runtime import IndicesRuntime, _same_lane_stop_cooldown_reason
 
 
 class Client:
@@ -264,6 +264,63 @@ def test_profit_protection_records_new_peak_without_closing(tmp_path, monkeypatc
     assert updates == []
     assert client.closed_trades == []
     assert state["open_positions"][0]["metadata"]["peak_pnl_pct"] == 39.0
+
+
+def test_no_progress_loss_exit_closes_aged_trade_without_mfe(tmp_path, monkeypatch) -> None:
+    config = replace(
+        _live_config(tmp_path, monkeypatch),
+        no_progress_exit_enabled=True,
+        no_progress_min_bars=4,
+        no_progress_min_peak_r=0.10,
+        no_progress_loss_r=0.35,
+    )
+    client = ProtectionClient(unrealized_pl=-40.0)
+    runtime = IndicesRuntime(config, client=client, telegram=Telegram())
+    now = datetime.now(timezone.utc)
+    state = {
+        "open_positions": [
+            {
+                "symbol": "SPX500",
+                "instrument": "SPX500_USD",
+                "direction": "LONG",
+                "order_id": "trade-1",
+                "opened_at": (now - timedelta(hours=3)).isoformat(),
+                "metadata": {"risk_amount": 100.0, "no_progress_peak_r": 0.05},
+            }
+        ],
+        "events": [],
+    }
+
+    updates, errors = runtime._apply_no_progress_loss_exit(state, now)
+
+    assert errors == []
+    assert len(updates) == 1
+    assert client.closed_trades == ["trade-1"]
+    assert state["open_positions"] == []
+    assert updates[0]["exit_reason"] == "no_progress_loss_exit"
+    assert updates[0]["no_progress_current_r"] == -0.4
+
+
+def test_same_lane_stop_cooldown_blocks_recent_stopped_lane(tmp_path, monkeypatch) -> None:
+    config = _live_config(tmp_path, monkeypatch)
+    now = datetime.now(timezone.utc)
+    opportunity = type("Opportunity", (), {"symbol": "NAS100", "direction": "SHORT", "strategy": "OPENING_RANGE_BREAKOUT"})()
+    state = {
+        "events": [
+            {
+                "type": "trade_closed",
+                "symbol": "NAS100",
+                "direction": "SHORT",
+                "strategy": "OPENING_RANGE_BREAKOUT",
+                "reason": "stop_loss_order",
+                "at": (now - timedelta(minutes=20)).isoformat(),
+            }
+        ]
+    }
+
+    reason = _same_lane_stop_cooldown_reason(state, opportunity, now, config.same_lane_stop_cooldown_minutes)
+
+    assert reason.startswith("same_lane_stop_cooldown:")
 
 
 def test_time_stop_closes_aged_paper_position(tmp_path, monkeypatch) -> None:

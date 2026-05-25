@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, timezone
+from math import ceil
 from typing import Any
 
 from indicesbot.calibration import strategy_adjustment
@@ -18,6 +19,7 @@ def run_backtest(config: IndicesConfig, candles_by_symbol: dict[str, list], macr
     equity = config.backtest_initial_balance
     peak_equity = equity
     max_drawdown = 0.0
+    cooldown_until: dict[str, int] = {}
     for symbol, candles in candles_by_symbol.items():
         instrument = config.oanda_instrument_for(symbol) or symbol
         for index in range(80, len(candles), 12):
@@ -30,6 +32,7 @@ def run_backtest(config: IndicesConfig, candles_by_symbol: dict[str, list], macr
             if calibration:
                 opportunities = [_apply_calibration(opportunity, calibration) for opportunity in opportunities]
             opportunities = [opportunity for opportunity in opportunities if macro_strategy_allowed(config, opportunity, macro)]
+            opportunities = [opportunity for opportunity in opportunities if index > cooldown_until.get(_cooldown_key(opportunity), -1)]
             best = select_best_opportunity(
                 opportunities,
                 min_score=min_score,
@@ -60,6 +63,10 @@ def run_backtest(config: IndicesConfig, candles_by_symbol: dict[str, list], macr
                 "held_bars": held_bars,
                 "opened_at": best.metadata.get("time", window[-1].time.isoformat()),
             })
+            if _is_stop_exit(exit_reason):
+                cooldown_bars = ceil(max(0, int(getattr(config, "same_lane_stop_cooldown_minutes", 0))) / max(1, int(getattr(config, "bar_minutes", 15))))
+                if cooldown_bars > 0:
+                    cooldown_until[_cooldown_key(best)] = index + held_bars + cooldown_bars
     wins = [trade for trade in trades if trade["pnl"] > 0]
     losses = [trade for trade in trades if trade["pnl"] < 0]
     gross_win = sum(trade["pnl"] for trade in wins)
@@ -92,6 +99,15 @@ def _apply_calibration(opportunity: Any, calibration: dict[str, Any]) -> Any:
     return replace(opportunity, score=opportunity.score + score_offset, risk_multiplier=opportunity.risk_multiplier * risk_multiplier)
 
 
+def _cooldown_key(opportunity: Any) -> str:
+    return f"{opportunity.symbol}:{opportunity.strategy}:{opportunity.direction}".upper()
+
+
+def _is_stop_exit(reason: str) -> bool:
+    normalized = str(reason or "").strip().lower()
+    return normalized in {"stop", "stop_loss_order", "stop_and_target_same_bar"} or "stop_loss" in normalized
+
+
 def _simulate_exit(candles: list, entry_index: int, opportunity: Any, *, max_hold_bars: int, config: IndicesConfig | None = None) -> tuple[float, str, int]:
     future = candles[entry_index + 1 : min(len(candles), entry_index + max(1, max_hold_bars) + 1)]
     if not future:
@@ -101,14 +117,18 @@ def _simulate_exit(candles: list, entry_index: int, opportunity: Any, *, max_hol
     profit_lock_enabled = bool(getattr(config, "profit_lock_enabled", False))
     trigger_r = max(0.0, float(getattr(config, "profit_lock_trigger_pct", 0.0))) / 100.0
     pullback_r = max(0.0, float(getattr(config, "profit_lock_pullback_pct", 0.0))) / 100.0
+    no_progress_enabled = bool(getattr(config, "no_progress_exit_enabled", False))
+    no_progress_min_bars = max(1, int(getattr(config, "no_progress_min_bars", 0)))
+    no_progress_min_peak_r = max(0.0, float(getattr(config, "no_progress_min_peak_r", 0.0)))
+    no_progress_loss_r = max(0.0, float(getattr(config, "no_progress_loss_r", 0.0)))
     peak_r = 0.0
     lock_armed = False
     lock_floor_r = 0.0
     for held_bars, candle in enumerate(future, start=1):
         armed_before = lock_armed
         if opportunity.direction == "LONG":
+            peak_r = max(peak_r, (candle.high - opportunity.entry_price) / stop_distance)
             if profit_lock_enabled:
-                peak_r = max(peak_r, (candle.high - opportunity.entry_price) / stop_distance)
                 if peak_r >= trigger_r:
                     lock_armed = True
                     lock_floor_r = max(0.0, peak_r - pullback_r)
@@ -124,9 +144,12 @@ def _simulate_exit(candles: list, entry_index: int, opportunity: Any, *, max_hol
                 return opportunity.stop_price, "stop", held_bars
             if targeted:
                 return float(target), "target", held_bars
+            current_r = (candle.close - opportunity.entry_price) / stop_distance
+            if no_progress_enabled and held_bars >= no_progress_min_bars and peak_r < no_progress_min_peak_r and current_r <= -no_progress_loss_r:
+                return candle.close, "no_progress_loss_exit", held_bars
         else:
+            peak_r = max(peak_r, (opportunity.entry_price - candle.low) / stop_distance)
             if profit_lock_enabled:
-                peak_r = max(peak_r, (opportunity.entry_price - candle.low) / stop_distance)
                 if peak_r >= trigger_r:
                     lock_armed = True
                     lock_floor_r = max(0.0, peak_r - pullback_r)
@@ -142,6 +165,9 @@ def _simulate_exit(candles: list, entry_index: int, opportunity: Any, *, max_hol
                 return opportunity.stop_price, "stop", held_bars
             if targeted:
                 return float(target), "target", held_bars
+            current_r = (opportunity.entry_price - candle.close) / stop_distance
+            if no_progress_enabled and held_bars >= no_progress_min_bars and peak_r < no_progress_min_peak_r and current_r <= -no_progress_loss_r:
+                return candle.close, "no_progress_loss_exit", held_bars
     return future[-1].close, "time_exit", len(future)
 
 

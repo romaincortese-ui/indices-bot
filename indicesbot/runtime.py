@@ -114,6 +114,11 @@ class IndicesRuntime:
             self.telegram.send(profit_lock_message(row))
         if profit_errors:
             state["last_profit_protection_errors"] = profit_errors[:5]
+        no_progress_closed, no_progress_errors = self._apply_no_progress_loss_exit(state, now)
+        for row in no_progress_closed:
+            self.telegram.send(trade_closed_message(row, reason="no_progress_loss_exit"))
+        if no_progress_errors:
+            state["last_no_progress_exit_errors"] = no_progress_errors[:5]
         if state.get("paused") or state.get("halted"):
             state["last_scan"] = {"status": "paused" if state.get("paused") else "halted", "blocked_by": "paused_or_halted", "at": now.isoformat()}
             self._save_status(state, "paused")
@@ -197,7 +202,23 @@ class IndicesRuntime:
             min_score=self.config.min_score,
             score_threshold=lambda opportunity: opportunity_min_score(self.config, opportunity, macro_state, default_min_score=self.config.min_score),
         )
+        cooldown_blocked = []
+        if candidates:
+            filtered_candidates = []
+            for opportunity in candidates:
+                cooldown_reason = _same_lane_stop_cooldown_reason(state, opportunity, now, self.config.same_lane_stop_cooldown_minutes)
+                if cooldown_reason:
+                    cooldown_blocked.append({"symbol": opportunity.symbol, "direction": opportunity.direction, "strategy": opportunity.strategy, "reason": cooldown_reason, "score": opportunity.score})
+                    self._record_miss(state, opportunity.symbol, opportunity.direction, opportunity.strategy, cooldown_reason, opportunity.score)
+                    log.info("scan_blocked reason=%s best_symbol=%s best_strategy=%s score=%.2f", cooldown_reason, opportunity.symbol, opportunity.strategy, opportunity.score)
+                else:
+                    filtered_candidates.append(opportunity)
+            candidates = filtered_candidates
         if not candidates:
+            if cooldown_blocked:
+                state["last_scan"] = {"status": "blocked", "blocked_by": cooldown_blocked[0]["reason"], "blocked": cooldown_blocked[:5], "at": now.isoformat()}
+                self._save_status(state, "blocked")
+                return state
             state["last_scan"] = {"status": "idle", "blocked_by": "score_below_threshold", "reasons": all_reasons[-25:], "at": now.isoformat()}
             self._save_status(state, "idle")
             log.info("scan_idle reason=score_below_threshold opportunities=%d", len(all_opportunities))
@@ -237,7 +258,7 @@ class IndicesRuntime:
                 position.order_id = order_id
                 row = position_to_row(position)
                 state.setdefault("open_positions", []).append(row)
-                state.setdefault("events", []).append({"type": "trade_opened", "symbol": best_for_order.symbol, "direction": best_for_order.direction, "strategy": best_for_order.strategy, "order_id": order_id, "at": now.isoformat()})
+                state.setdefault("events", []).append({"type": "trade_opened", "symbol": best_for_order.symbol, "direction": best_for_order.direction, "strategy": best_for_order.strategy, "order_id": order_id, "entry_price": position.entry_price, "stop_price": position.stop_price, "take_profit_price": position.take_profit_price, "units": position.units, "score": best_for_order.score, "at": now.isoformat()})
                 opened.append({"symbol": best_for_order.symbol, "direction": best_for_order.direction, "strategy": best_for_order.strategy, "order_id": order_id})
                 self.telegram.send(order_opened_message(position))
                 log.info("trade_opened symbol=%s direction=%s strategy=%s units=%.2f order_id=%s", best_for_order.symbol, best_for_order.direction, best_for_order.strategy, position.units, order_id)
@@ -312,7 +333,8 @@ class IndicesRuntime:
             row["sync_reason"] = "not_in_oanda_open_positions"
             row.setdefault("exit_reason", "broker_reconciliation")
             self._enrich_row_from_recent_close(row, trade_id)
-            state.setdefault("events", []).append({"type": "trade_closed", "reason": row.get("exit_reason"), "sync_reason": row.get("sync_reason"), "symbol": row.get("symbol"), "order_id": row.get("order_id"), "realized_pl": row.get("realized_pl"), "at": closed_at})
+            state.setdefault("events", []).append({"type": "trade_closed", "reason": row.get("exit_reason"), "sync_reason": row.get("sync_reason"), "symbol": row.get("symbol"), "direction": row.get("direction"), "strategy": row.get("strategy"), "instrument": row.get("instrument"), "order_id": row.get("order_id"), "realized_pl": row.get("realized_pl"), "closed_at": row.get("closed_at"), "at": closed_at})
+            log.info("trade_closed symbol=%s direction=%s strategy=%s reason=%s order_id=%s realized_pl=%s", row.get("symbol"), row.get("direction"), row.get("strategy"), row.get("exit_reason"), row.get("order_id"), row.get("realized_pl"))
         return closed
 
     def _apply_time_stop(self, state: dict[str, Any], now: datetime) -> list[dict[str, Any]]:
@@ -355,11 +377,14 @@ class IndicesRuntime:
                 "type": "trade_closed",
                 "reason": "max_hold_time_stop",
                 "symbol": row.get("symbol"),
+                "direction": row.get("direction"),
+                "strategy": row.get("strategy"),
                 "instrument": row.get("instrument"),
                 "order_id": trade_id,
                 "age_minutes": int((now - opened_at).total_seconds() // 60),
                 "at": now.isoformat(),
             })
+            log.info("trade_closed symbol=%s direction=%s strategy=%s reason=max_hold_time_stop order_id=%s", row.get("symbol"), row.get("direction"), row.get("strategy"), trade_id)
         state["open_positions"] = kept
         return stopped
 
@@ -439,6 +464,86 @@ class IndicesRuntime:
         state["open_positions"] = kept_rows
         state["last_profit_protection_updates"] = updates
         state["last_profit_protection_errors"] = errors[:5]
+        return updates, errors
+
+    def _apply_no_progress_loss_exit(self, state: dict[str, Any], now: datetime) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        updates: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+        if not self.config.no_progress_exit_enabled:
+            state["last_no_progress_exit_updates"] = []
+            return updates, errors
+        broker_available = not self.config.paper_trade and self.config.live_trading_enabled and self.config.has_oanda_credentials
+        if not broker_available:
+            state["last_no_progress_exit_updates"] = []
+            return updates, errors
+        rows = state.get("open_positions", []) if isinstance(state.get("open_positions"), list) else []
+        if not rows:
+            state["last_no_progress_exit_updates"] = []
+            return updates, errors
+        try:
+            trades = self.client.open_trades()
+        except RuntimeError as exc:
+            errors.append({"stage": "no_progress_open_trades", "error": str(exc)})
+            state["last_no_progress_exit_errors"] = errors[:5]
+            return updates, errors
+        trades_by_id = {str(trade.get("id") or ""): trade for trade in trades if isinstance(trade, dict) and trade.get("id")}
+        trades_by_instrument: dict[str, dict[str, object]] = {}
+        for trade in trades:
+            if not isinstance(trade, dict):
+                continue
+            instrument = str(trade.get("instrument") or "").strip().upper()
+            if instrument and instrument not in trades_by_instrument:
+                trades_by_instrument[instrument] = trade
+        kept_rows: list[dict[str, Any]] = []
+        min_age = timedelta(minutes=max(1, int(self.config.no_progress_min_bars)) * max(1, int(self.config.bar_minutes)))
+        min_peak_r = max(0.0, float(self.config.no_progress_min_peak_r))
+        loss_r = max(0.0, float(self.config.no_progress_loss_r))
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            instrument = str(row.get("instrument") or "").strip().upper()
+            trade_id = str(row.get("order_id") or "").strip()
+            trade = trades_by_id.get(trade_id) or trades_by_instrument.get(instrument)
+            if not instrument or not trade_id or not isinstance(trade, dict):
+                kept_rows.append(row)
+                continue
+            self._enrich_row_from_trade(row, trade)
+            opened_at = _parse_datetime(row.get("opened_at"))
+            if opened_at is None or now - opened_at < min_age:
+                kept_rows.append(row)
+                continue
+            current_r = _position_unrealized_r(row)
+            if current_r is None:
+                kept_rows.append(row)
+                continue
+            metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+            metadata = dict(metadata)
+            peak_r = _float_or_none(metadata.get("no_progress_peak_r"))
+            if peak_r is None or current_r > peak_r:
+                peak_r = current_r
+                metadata["no_progress_peak_r"] = peak_r
+                metadata["no_progress_peak_seen_at"] = now.isoformat()
+            row["metadata"] = metadata
+            if peak_r >= min_peak_r or current_r > -loss_r:
+                kept_rows.append(row)
+                continue
+            try:
+                close_response = self.client.close_trade(trade_id)
+                self._enrich_row_from_close(row, close_response)
+            except RuntimeError as exc:
+                errors.append({"symbol": row.get("symbol") or instrument, "instrument": instrument, "stage": "no_progress_close", "error": str(exc)})
+                kept_rows.append(row)
+                continue
+            row["closed_at"] = now.isoformat()
+            row["exit_reason"] = "no_progress_loss_exit"
+            row["no_progress_peak_r"] = peak_r
+            row["no_progress_current_r"] = current_r
+            updates.append(dict(row))
+            state.setdefault("events", []).append({"type": "trade_closed", "reason": "no_progress_loss_exit", "symbol": row.get("symbol"), "direction": row.get("direction"), "strategy": row.get("strategy"), "instrument": instrument, "order_id": trade_id, "peak_r": peak_r, "current_r": current_r, "at": now.isoformat()})
+            log.info("trade_closed symbol=%s direction=%s strategy=%s reason=no_progress_loss_exit order_id=%s current_r=%.3f peak_r=%.3f", row.get("symbol"), row.get("direction"), row.get("strategy"), trade_id, current_r, peak_r)
+        state["open_positions"] = kept_rows
+        state["last_no_progress_exit_updates"] = updates
+        state["last_no_progress_exit_errors"] = errors[:5]
         return updates, errors
 
     def _enrich_row_from_trade(self, row: dict[str, Any], trade: dict[str, object]) -> None:
@@ -593,6 +698,16 @@ def _position_entry_budget(row: dict[str, Any]) -> float | None:
     return value if value is not None and value > 0 else None
 
 
+def _position_risk_amount(row: dict[str, Any]) -> float | None:
+    for key in ("risk_amount", "risk_at_sl", "stop_risk"):
+        value = _float_or_none(row.get(key))
+        if value is not None and value > 0:
+            return value
+    metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    value = _float_or_none(metadata.get("risk_amount"))
+    return value if value is not None and value > 0 else None
+
+
 def _position_unrealized_pl(row: dict[str, Any]) -> float | None:
     for key in ("unrealized_pl", "unrealizedPL"):
         value = _float_or_none(row.get(key))
@@ -622,6 +737,46 @@ def _position_pnl_pct(row: dict[str, Any]) -> float | None:
     if entry_budget is None or entry_budget <= 0 or unrealized_pl is None:
         return None
     return unrealized_pl / entry_budget * 100.0
+
+
+def _position_unrealized_r(row: dict[str, Any]) -> float | None:
+    unrealized_pl = _position_unrealized_pl(row)
+    risk_amount = _position_risk_amount(row)
+    if unrealized_pl is None or risk_amount is None or risk_amount <= 0:
+        return None
+    return unrealized_pl / risk_amount
+
+
+def _same_lane_stop_cooldown_reason(state: dict[str, Any], opportunity: Any, now: datetime, cooldown_minutes: int) -> str:
+    cooldown = timedelta(minutes=max(0, int(cooldown_minutes)))
+    if cooldown.total_seconds() <= 0:
+        return ""
+    cutoff = now - cooldown
+    symbol = str(getattr(opportunity, "symbol", "") or "").upper()
+    direction = str(getattr(opportunity, "direction", "") or "").upper()
+    strategy = str(getattr(opportunity, "strategy", "") or "").upper()
+    for event in reversed(state.get("events", []) if isinstance(state.get("events"), list) else []):
+        if not isinstance(event, dict) or event.get("type") != "trade_closed":
+            continue
+        closed_at = _parse_datetime(event.get("at") or event.get("closed_at"))
+        if closed_at is None or closed_at < cutoff:
+            continue
+        if str(event.get("symbol") or "").upper() != symbol:
+            continue
+        if str(event.get("direction") or "").upper() != direction:
+            continue
+        if str(event.get("strategy") or "").upper() != strategy:
+            continue
+        if not _is_stop_loss_exit(event.get("reason") or event.get("exit_reason")):
+            continue
+        remaining = max(1, int((cooldown - (now - closed_at)).total_seconds() // 60))
+        return f"same_lane_stop_cooldown:{remaining}m"
+    return ""
+
+
+def _is_stop_loss_exit(value: object) -> bool:
+    reason = str(value or "").strip().lower()
+    return reason in {"stop", "stop_loss_order", "stop_and_target_same_bar"} or "stop_loss" in reason
 
 
 def _runtime_open_metrics(rows: list[Any]) -> tuple[float, float, float, int]:

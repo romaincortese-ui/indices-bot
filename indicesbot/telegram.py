@@ -42,6 +42,7 @@ def _humanize(value: object, default: str = "n/a") -> str:
         "not_in_oanda_open_positions": "broker sync: OANDA no longer reports this trade open",
         "broker_reconciliation": "broker sync: OANDA no longer reports this trade open",
         "max_hold_time_stop": "max hold time stop",
+        "no_progress_loss_exit": "no-progress loss exit",
         "peak_pullback_profit_lock": "peak pullback profit lock",
         "peak_pullback_trailing_stop": "peak pullback trailing stop",
         "stop_loss_order": "broker stop loss order",
