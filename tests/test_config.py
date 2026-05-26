@@ -17,6 +17,8 @@ def test_config_defaults_safe(monkeypatch) -> None:
         "SPX500:OPENING_RANGE_BREAKOUT:SHORT",
         "NAS100:OPENING_RANGE_BREAKOUT:SHORT",
         "US30:OPENING_RANGE_BREAKOUT:SHORT",
+        "DE40:OPENING_RANGE_BREAKOUT:LONG",
+        "FR40:OPENING_RANGE_BREAKOUT:LONG",
     )
     assert config.us_holiday_orb_block_enabled is True
     assert config.same_lane_stop_cooldown_minutes == 90

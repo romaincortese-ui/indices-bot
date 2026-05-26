@@ -22,6 +22,8 @@ DEFAULT_DISABLED_STRATEGY_LANES = (
     "SPX500:OPENING_RANGE_BREAKOUT:SHORT",
     "NAS100:OPENING_RANGE_BREAKOUT:SHORT",
     "US30:OPENING_RANGE_BREAKOUT:SHORT",
+    "DE40:OPENING_RANGE_BREAKOUT:LONG",
+    "FR40:OPENING_RANGE_BREAKOUT:LONG",
 )
 
 REGION_BUCKETS = {
@@ -229,7 +231,7 @@ class IndicesConfig:
             daily_review_key=env_str("INDICES_DAILY_REVIEW_KEY", "bot_assessor:indices:daily_review"),
             overlay_key=env_str("INDICES_OVERLAY_KEY", "bot_assessor:indices:overlays"),
             budget_allocation=min(1.0, max(0.0, env_float("INDICES_BUDGET_ALLOCATION", 1.0))),
-            max_risk_per_trade=env_float("MAX_RISK_PER_TRADE", 0.003),
+            max_risk_per_trade=env_float("MAX_RISK_PER_TRADE", 0.0039),
             max_total_indices_risk=env_float("MAX_TOTAL_INDICES_RISK", 0.012),
             max_open_indices_trades=env_int("MAX_OPEN_INDICES_TRADES", 3),
             max_open_per_region=env_int("MAX_OPEN_PER_REGION", 2),
