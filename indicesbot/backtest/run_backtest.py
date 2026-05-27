@@ -87,12 +87,20 @@ def main(argv: list[str] | None = None) -> int:
         for index, trade in enumerate(summary["trades"]):
             equity += float(trade["pnl"])
             writer.writerow({"index": index, "equity": equity})
-    calibration_payload = write_calibration(config.calibration_file, calibration or calibration_from_summary(summary))
-    write_daily_review(config.daily_review_file, {"events": [], "missed_opportunities": [], "signals_seen": summary["total_trades"]}, summary)
-    response = {"summary": {key: summary[key] for key in ("total_trades", "total_pnl", "return_pct", "profit_factor", "win_rate", "max_drawdown")}, "data_sources": data_sources, "macro_scenario": args.macro_scenario, "calibration_source": calibration_source, "output_dir": str(output_dir), "calibration": calibration_payload["generated_at"]}
+    validation_failed = days >= 30 and float(summary.get("total_pnl", 0.0) or 0.0) <= 0
+    calibration_payload = None
+    if not validation_failed:
+        calibration_payload = write_calibration(config.calibration_file, calibration or calibration_from_summary(summary))
+        write_daily_review(config.daily_review_file, {"events": [], "missed_opportunities": [], "signals_seen": summary["total_trades"]}, summary)
+    response = {"summary": {key: summary[key] for key in ("total_trades", "total_pnl", "return_pct", "profit_factor", "win_rate", "max_drawdown")}, "data_sources": data_sources, "macro_scenario": args.macro_scenario, "calibration_source": calibration_source, "output_dir": str(output_dir), "calibration": calibration_payload["generated_at"] if calibration_payload else None}
     if baseline_summary:
         response["baseline"] = summary["baseline"]
     print(json.dumps(response, indent=2))
+    if validation_failed:
+        print(f"validation=failed reason=non_positive_pnl pnl={float(summary.get('total_pnl', 0.0) or 0.0):.2f}")
+        return 1
+    if days >= 30:
+        print("validation=passed reason=positive_pnl")
     return 0
 
 
