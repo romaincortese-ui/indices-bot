@@ -140,9 +140,35 @@ class OandaClient:
         target = str(trade_id or "").strip()
         if not target:
             return None
+        # Primary: fetch the closed trade directly — returns realizedPL reliably.
+        # Normalize to a shape that _enrich_row_from_close can consume via its
+        # fallback path (it checks transaction.get("pl") when no tradesClosed parts).
+        try:
+            payload = self._request(
+                "GET",
+                f"/v3/accounts/{self.config.oanda_account_id}/trades?{urlencode({'ids': target, 'state': 'CLOSED'})}",
+            )
+            trades = payload.get("trades", []) if isinstance(payload, dict) else []
+            for trade in trades if isinstance(trades, list) else []:
+                if isinstance(trade, dict) and str(trade.get("id") or "") == target:
+                    return {
+                        "pl": trade.get("realizedPL"),
+                        "time": trade.get("closeTime"),
+                        "financing": trade.get("financing"),
+                        "price": trade.get("averageClosePrice"),
+                    }
+        except Exception:
+            pass
+        # Fallback: walk transactions since the trade was opened via sinceid.
+        # OANDA's /transactions?type=ORDER_FILL returns page links, not objects.
+        # /transactions/sinceid always returns actual transaction dicts.
+        try:
+            since_id = max(1, int(target) - 1)
+        except (ValueError, TypeError):
+            since_id = 1
         payload = self._request(
             "GET",
-            f"/v3/accounts/{self.config.oanda_account_id}/transactions?{urlencode({'count': max(1, min(500, int(count))), 'type': 'ORDER_FILL'})}",
+            f"/v3/accounts/{self.config.oanda_account_id}/transactions/sinceid?{urlencode({'id': since_id})}",
         )
         transactions = payload.get("transactions", []) if isinstance(payload, dict) else []
         for transaction in reversed(transactions if isinstance(transactions, list) else []):

@@ -26,10 +26,17 @@ class Session:
             return Response(payload={"instruments": self.instruments})
         if url.endswith("/orders"):
             return Response(payload={"orderFillTransaction": {"id": "10", "price": "5100.1", "tradeOpened": {"tradeID": "99"}}})
-        if "/transactions?" in url:
+        if "/trades?" in url and "state=CLOSED" in url:
+            # Simulate the closed trades endpoint used by recent_trade_close primary path
+            trade_id = url.split("ids=")[-1].split("&")[0] if "ids=" in url else ""
+            if trade_id == "159":
+                return Response(payload={"trades": [{"id": "159", "realizedPL": "-2.10", "closeTime": "2026-05-29T15:30:00.000000000Z", "averageClosePrice": "21450.0", "financing": "-0.0001"}]})
+            return Response(payload={"trades": []})
+        if "/transactions/sinceid" in url:
+            # Fallback sinceid path — returns actual transaction objects
             return Response(payload={"transactions": [
-                {"id": "98", "type": "ORDER_FILL", "tradesClosed": [{"tradeID": "158", "realizedPL": "1.20"}]},
-                {"id": "99", "type": "ORDER_FILL", "reason": "STOP_LOSS_ORDER", "tradesClosed": [{"tradeID": "159", "realizedPL": "-2.10"}]},
+                {"id": "158", "type": "ORDER_FILL", "tradesClosed": [{"tradeID": "158", "realizedPL": "1.20"}]},
+                {"id": "159", "type": "ORDER_FILL", "reason": "STOP_LOSS_ORDER", "tradesClosed": [{"tradeID": "159", "realizedPL": "-2.10"}]},
             ]})
         return Response(payload={})
 
@@ -103,7 +110,29 @@ def test_recent_trade_close_finds_matching_order_fill(monkeypatch) -> None:
 
     close = client.recent_trade_close("159")
 
+    # Primary path: normalised closed-trade dict with realizedPL in "pl"
     assert close is not None
-    assert close["reason"] == "STOP_LOSS_ORDER"
-    assert close["tradesClosed"][0]["realizedPL"] == "-2.10"
-    assert "/transactions?" in session.calls[-1][1]
+    assert close["pl"] == "-2.10"
+    assert close["time"] == "2026-05-29T15:30:00.000000000Z"
+    assert "/trades?" in session.calls[-1][1]
+    assert "state=CLOSED" in session.calls[-1][1]
+
+
+def test_recent_trade_close_falls_back_to_sinceid(monkeypatch) -> None:
+    """When the closed trades endpoint returns nothing, fall back to sinceid."""
+    monkeypatch.setenv("OANDA_ACCOUNT_ID", "acct")
+    monkeypatch.setenv("OANDA_API_TOKEN", "token")
+    monkeypatch.setenv("PAPER_TRADE", "false")
+    monkeypatch.setenv("LIVE_TRADING_ENABLED", "true")
+    monkeypatch.setenv("EXECUTION_MODE", "paper")
+    config = IndicesConfig.from_env()
+    # Use a trade ID that is NOT in the closed trades mock so the fallback is exercised
+    session = Session()
+    client = OandaClient(config, session=session)
+
+    close = client.recent_trade_close("158")
+
+    # Fallback path: raw ORDER_FILL transaction dict from sinceid endpoint
+    assert close is not None
+    assert close["tradesClosed"][0]["realizedPL"] == "1.20"
+    assert "/transactions/sinceid" in session.calls[-1][1]
