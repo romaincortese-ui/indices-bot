@@ -17,12 +17,11 @@ if load_dotenv is not None and find_dotenv is not None:
         load_dotenv(dotenv_path, override=False)
 
 DEFAULT_UNIVERSE = ("SPX500", "NAS100", "US30", "UK100", "DE40", "EU50", "FR40", "JP225", "HK33", "AU200")
-DEFAULT_ENABLED_STRATEGIES = ("TREND_PULLBACK", "OPENING_RANGE_BREAKOUT")
+DEFAULT_ENABLED_STRATEGIES = ("TREND_PULLBACK", "OPENING_RANGE_BREAKOUT", "EVENT_MOMENTUM")
 DEFAULT_DISABLED_STRATEGY_LANES = (
-    "SPX500:OPENING_RANGE_BREAKOUT:SHORT",
-    "NAS100:OPENING_RANGE_BREAKOUT:SHORT",
+    # US30 ORB SHORT kept off — Dow is thin and unreliable for breakout shorts
     "US30:OPENING_RANGE_BREAKOUT:SHORT",
-    "DE40:OPENING_RANGE_BREAKOUT:LONG",
+    # FR40 ORB LONG kept off — FR40 already top earner via trend pullback, avoid overloading the lane
     "FR40:OPENING_RANGE_BREAKOUT:LONG",
 )
 
@@ -239,14 +238,14 @@ class IndicesConfig:
             max_live_orders_per_scan=env_int("MAX_LIVE_ORDERS_PER_SCAN", 1),
             max_margin_per_entry_pct=env_float("MAX_MARGIN_PER_ENTRY_PCT", 0.08),
             min_margin_per_entry_pct=env_float("MIN_MARGIN_PER_ENTRY_PCT", 0.02),
-            min_unit_floor_enabled=env_bool("INDICES_MIN_UNIT_FLOOR_ENABLED", False),
+            min_unit_floor_enabled=env_bool("INDICES_MIN_UNIT_FLOOR_ENABLED", True),
             min_unit_floor_max_risk_nav_pct=env_float("INDICES_MIN_UNIT_FLOOR_MAX_RISK_NAV_PCT", 0.001),
             min_unit_floor_small_account_max_risk_nav_pct=env_float("INDICES_MIN_UNIT_FLOOR_SMALL_ACCOUNT_MAX_RISK_NAV_PCT", 0.06),
             min_unit_floor_small_account_max_total_risk_nav_pct=env_float("INDICES_MIN_UNIT_FLOOR_SMALL_ACCOUNT_MAX_TOTAL_RISK_NAV_PCT", 0.10),
             min_unit_floor_small_account_max_margin_nav_pct=env_float("INDICES_MIN_UNIT_FLOOR_SMALL_ACCOUNT_MAX_MARGIN_NAV_PCT", 0.60),
             min_unit_floor_max_target_risk_multiple=env_float("INDICES_MIN_UNIT_FLOOR_MAX_TARGET_RISK_MULTIPLE", 12.0),
             min_score=env_float("INDICES_MIN_SCORE", 78.0),
-            max_hold_bars=env_int("INDICES_MAX_HOLD_BARS", 12),
+            max_hold_bars=env_int("INDICES_MAX_HOLD_BARS", 24),
             bar_minutes=env_int("INDICES_BAR_MINUTES", 15),
             enabled_strategies=env_csv("INDICES_ENABLED_STRATEGIES", DEFAULT_ENABLED_STRATEGIES),
             disabled_strategy_lanes=env_csv_with_clear("INDICES_DISABLED_STRATEGY_LANES", DEFAULT_DISABLED_STRATEGY_LANES),
@@ -259,11 +258,11 @@ class IndicesConfig:
             rolling_dd_throttle_pct=env_float("ROLLING_DD_THROTTLE_PCT", 0.05),
             rolling_dd_halt_pct=env_float("ROLLING_DD_HALT_PCT", 0.10),
             profit_lock_enabled=env_bool("PROFIT_LOCK_ENABLED", True),
-            profit_lock_trigger_pct=env_float("PROFIT_LOCK_TRIGGER_PCT", 15.0),
-            profit_lock_pullback_pct=env_float("PROFIT_LOCK_PULLBACK_PCT", 2.0),
+            profit_lock_trigger_pct=env_float("PROFIT_LOCK_TRIGGER_PCT", 20.0),
+            profit_lock_pullback_pct=env_float("PROFIT_LOCK_PULLBACK_PCT", 4.0),
             no_progress_exit_enabled=env_bool("INDICES_NO_PROGRESS_EXIT_ENABLED", True),
             no_progress_min_bars=env_int("INDICES_NO_PROGRESS_MIN_BARS", 8),
-            no_progress_min_peak_r=env_float("INDICES_NO_PROGRESS_MIN_PEAK_R", 0.08),
+            no_progress_min_peak_r=env_float("INDICES_NO_PROGRESS_MIN_PEAK_R", 0.12),
             no_progress_loss_r=env_float("INDICES_NO_PROGRESS_LOSS_R", 0.35),
             max_entry_spread_atr=env_float("MAX_ENTRY_SPREAD_ATR", 0.08),
             adaptive_spread_enabled=env_bool("ADAPTIVE_SPREAD_ENABLED", True),

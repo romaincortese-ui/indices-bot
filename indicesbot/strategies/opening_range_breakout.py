@@ -23,7 +23,7 @@ def score_opening_range_breakout(config: IndicesConfig, symbol: str, instrument:
     last = candles_m15[-1]
     impulse = body_atr_ratio(candles_m15, atr_value)
     buffer = atr_value * 0.12
-    if impulse < 0.35:
+    if impulse < 0.38:
         reasons.append(f"{strategy}:impulse_missing")
         return None
     if direction == "LONG" and not (last.close > high + buffer and candle_direction(last) == "UP"):

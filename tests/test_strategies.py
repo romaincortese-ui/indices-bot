@@ -50,7 +50,7 @@ def test_event_momentum_requires_event_score() -> None:
     assert opportunity.strategy == "EVENT_MOMENTUM"
 
 
-def test_default_strategy_allow_list_excludes_event_momentum() -> None:
+def test_default_strategy_allow_list_includes_event_momentum() -> None:
     config = IndicesConfig.from_env()
     quote = IndexQuote("SPX500", "SPX500_USD", 109, 109.1, 109.05, 0.1, True, "tradeable", datetime.now(timezone.utc))
     regime = MarketRegime("SPX500", "US", "BULL", "NORMAL", "RISK_ON", "US_CASH_OPEN")
@@ -59,32 +59,28 @@ def test_default_strategy_allow_list_excludes_event_momentum() -> None:
 
     opportunities = evaluate_all(config, "SPX500", "SPX500_USD", quote, _candles("UP"), _candles("UP"), _candles("UP"), regime, macro, reasons)
 
-    assert all(item.strategy != "EVENT_MOMENTUM" for item in opportunities)
-    assert "EVENT_MOMENTUM:disabled" in reasons
+    # EVENT_MOMENTUM is now enabled by default and should be considered when event scores are present
+    assert "EVENT_MOMENTUM" in config.enabled_strategies
+    assert "EVENT_MOMENTUM:disabled" not in reasons
 
 
-def test_disabled_strategy_lane_excludes_default_spx_short_orb() -> None:
+def test_disabled_strategy_lane_excludes_default_us30_short_orb() -> None:
     config = IndicesConfig.from_env()
-    quote = IndexQuote("SPX500", "SPX500_USD", 91, 91.1, 91.05, 0.1, True, "tradeable", datetime(2026, 5, 26, 14, 45, tzinfo=timezone.utc))
-    regime = MarketRegime("SPX500", "US", "BEAR", "NORMAL", "MIXED", "US_CASH_OPEN")
+    quote = IndexQuote("US30", "US30_USD", 91, 91.1, 91.05, 0.1, True, "tradeable", datetime(2026, 5, 26, 14, 45, tzinfo=timezone.utc))
+    regime = MarketRegime("US30", "US", "BEAR", "NORMAL", "MIXED", "US_CASH_OPEN")
     reasons: list[str] = []
 
-    opportunities = evaluate_all(config, "SPX500", "SPX500_USD", quote, _candles("DOWN"), _candles("DOWN"), _candles("DOWN"), regime, {}, reasons)
+    opportunities = evaluate_all(config, "US30", "US30_USD", quote, _candles("DOWN"), _candles("DOWN"), _candles("DOWN"), regime, {}, reasons)
 
     assert all(not (item.strategy == "OPENING_RANGE_BREAKOUT" and item.direction == "SHORT") for item in opportunities)
     assert "OPENING_RANGE_BREAKOUT:short_lane_disabled" in reasons
 
 
-def test_disabled_strategy_lane_excludes_default_nas100_short_orb() -> None:
+def test_spx_and_nas100_short_orb_now_enabled_by_default() -> None:
+    """SPX500 and NAS100 ORB SHORT are no longer blocked; gap-down breakouts are valid."""
     config = IndicesConfig.from_env()
-    quote = IndexQuote("NAS100", "NAS100_USD", 91, 91.1, 91.05, 0.1, True, "tradeable", datetime(2026, 5, 26, 14, 45, tzinfo=timezone.utc))
-    regime = MarketRegime("NAS100", "US", "BEAR", "NORMAL", "MIXED", "US_CASH_OPEN")
-    reasons: list[str] = []
-
-    opportunities = evaluate_all(config, "NAS100", "NAS100_USD", quote, _candles("DOWN"), _candles("DOWN"), _candles("DOWN"), regime, {}, reasons)
-
-    assert all(not (item.strategy == "OPENING_RANGE_BREAKOUT" and item.direction == "SHORT") for item in opportunities)
-    assert "OPENING_RANGE_BREAKOUT:short_lane_disabled" in reasons
+    assert "SPX500:OPENING_RANGE_BREAKOUT:SHORT" not in config.disabled_strategy_lanes
+    assert "NAS100:OPENING_RANGE_BREAKOUT:SHORT" not in config.disabled_strategy_lanes
 
 
 def test_us_holiday_blocks_us_index_opening_range() -> None:

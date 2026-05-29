@@ -12,12 +12,9 @@ def test_config_defaults_safe(monkeypatch) -> None:
     assert config.live_trading_enabled is False
     assert "SPX500" in config.universe
     assert config.oanda_instrument_for("DE40") == "DE30_EUR"
-    assert config.enabled_strategies == ("TREND_PULLBACK", "OPENING_RANGE_BREAKOUT")
+    assert config.enabled_strategies == ("TREND_PULLBACK", "OPENING_RANGE_BREAKOUT", "EVENT_MOMENTUM")
     assert config.disabled_strategy_lanes == (
-        "SPX500:OPENING_RANGE_BREAKOUT:SHORT",
-        "NAS100:OPENING_RANGE_BREAKOUT:SHORT",
         "US30:OPENING_RANGE_BREAKOUT:SHORT",
-        "DE40:OPENING_RANGE_BREAKOUT:LONG",
         "FR40:OPENING_RANGE_BREAKOUT:LONG",
     )
     assert config.us_holiday_orb_block_enabled is True
@@ -27,7 +24,7 @@ def test_config_defaults_safe(monkeypatch) -> None:
     assert config.risk_on_enabled_strategies == ("OPENING_RANGE_BREAKOUT",)
     assert config.risk_off_aggressive_enabled is False
     assert config.risk_off_aggressive_enabled_strategies == ("EVENT_MOMENTUM", "OPENING_RANGE_BREAKOUT")
-    assert config.min_unit_floor_enabled is False
+    assert config.min_unit_floor_enabled is True
     assert config.min_unit_floor_small_account_max_risk_nav_pct == 0.06
     assert config.min_unit_floor_small_account_max_total_risk_nav_pct == 0.10
     assert config.min_unit_floor_small_account_max_margin_nav_pct == 0.60

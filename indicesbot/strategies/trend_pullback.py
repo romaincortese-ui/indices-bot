@@ -21,10 +21,10 @@ def score_trend_pullback(config: IndicesConfig, symbol: str, instrument: str, di
     fast = ema(values, 20)
     last = values[-1]
     momentum = rsi(values, 14)
-    if direction == "LONG" and not (last >= fast and 42 <= momentum <= 68):
+    if direction == "LONG" and not (last >= fast and 40 <= momentum <= 72):
         reasons.append(f"{strategy}:long_pullback_not_confirmed")
         return None
-    if direction == "SHORT" and not (last <= fast and 32 <= momentum <= 58):
+    if direction == "SHORT" and not (last <= fast and 28 <= momentum <= 62):
         reasons.append(f"{strategy}:short_pullback_not_confirmed")
         return None
     entry = quote.ask if direction == "LONG" else quote.bid
