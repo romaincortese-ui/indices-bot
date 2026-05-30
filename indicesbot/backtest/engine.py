@@ -8,6 +8,7 @@ from typing import Any
 from indicesbot.calibration import strategy_adjustment
 from indicesbot.config import IndicesConfig
 from indicesbot.models import IndexQuote
+from indicesbot.prediction_overlay import apply_prediction_overlay, load_prediction_state_payload, select_point_in_time_prediction_state
 from indicesbot.regimes import classify_regime
 from indicesbot.risk_off import macro_strategy_allowed, opportunity_min_score
 from indicesbot.strategies import evaluate_all, select_best_opportunity
@@ -15,6 +16,7 @@ from indicesbot.strategies import evaluate_all, select_best_opportunity
 
 def run_backtest(config: IndicesConfig, candles_by_symbol: dict[str, list], macro_state: dict | None = None, *, min_score: float = 72.0, max_hold_bars: int = 16, calibration: dict[str, Any] | None = None) -> dict[str, Any]:
     macro = macro_state or {"risk_regime": {"global": "MIXED"}, "event_scores": []}
+    prediction_payload = load_prediction_state_payload(config.prediction_overlay_state_file) if config.prediction_overlay_enabled else None
     trades: list[dict[str, Any]] = []
     equity = config.backtest_initial_balance
     peak_equity = equity
@@ -31,6 +33,29 @@ def run_backtest(config: IndicesConfig, candles_by_symbol: dict[str, list], macr
             opportunities = evaluate_all(config, symbol, instrument, quote, window[-120:], window[-80:], window[-80:], regime, macro, reasons)
             if calibration:
                 opportunities = [_apply_calibration(opportunity, calibration) for opportunity in opportunities]
+            if config.prediction_overlay_enabled:
+                prediction_state = select_point_in_time_prediction_state(prediction_payload, window[-1].time)
+                opportunities = [
+                    item
+                    for item in (
+                        apply_prediction_overlay(
+                            opportunity,
+                            prediction_state,
+                            window[-1].time,
+                            enabled=config.prediction_overlay_enabled,
+                            stale_seconds=config.prediction_overlay_stale_seconds,
+                            fallback_mode=config.prediction_overlay_fallback_mode,
+                            min_favourable_probability=config.prediction_overlay_min_favourable_probability,
+                            min_posterior=config.prediction_overlay_min_posterior,
+                            event_given_success=config.prediction_overlay_event_given_success,
+                            kelly_base_fraction=config.prediction_overlay_kelly_base_fraction,
+                            max_size_multiplier=config.prediction_overlay_max_size_multiplier,
+                            score_scale=config.prediction_overlay_score_scale,
+                        )
+                        for opportunity in opportunities
+                    )
+                    if item is not None
+                ]
             opportunities = [opportunity for opportunity in opportunities if macro_strategy_allowed(config, opportunity, macro)]
             opportunities = [opportunity for opportunity in opportunities if index > cooldown_until.get(_cooldown_key(opportunity), -1)]
             best = select_best_opportunity(

@@ -147,6 +147,16 @@ class IndicesConfig:
     daily_loss_halt_pct: float
     rolling_dd_throttle_pct: float
     rolling_dd_halt_pct: float
+    prediction_overlay_enabled: bool
+    prediction_overlay_state_file: Path
+    prediction_overlay_stale_seconds: int
+    prediction_overlay_fallback_mode: str
+    prediction_overlay_min_favourable_probability: float
+    prediction_overlay_min_posterior: float
+    prediction_overlay_event_given_success: float
+    prediction_overlay_kelly_base_fraction: float
+    prediction_overlay_max_size_multiplier: float
+    prediction_overlay_score_scale: float
     min_score: float
     max_hold_bars: int
     bar_minutes: int
@@ -257,6 +267,16 @@ class IndicesConfig:
             daily_loss_halt_pct=env_float("DAILY_LOSS_HALT_PCT", 0.015),
             rolling_dd_throttle_pct=env_float("ROLLING_DD_THROTTLE_PCT", 0.05),
             rolling_dd_halt_pct=env_float("ROLLING_DD_HALT_PCT", 0.10),
+            prediction_overlay_enabled=env_bool("INDICES_PREDICTION_OVERLAY_ENABLED", False),
+            prediction_overlay_state_file=Path(env_str("INDICES_BACKTEST_PREDICTION_STATE_FILE", env_str("INDICES_PREDICTION_STATE_FILE", ""))),
+            prediction_overlay_stale_seconds=max(1, env_int("INDICES_PREDICTION_STALE_SECONDS", 60)),
+            prediction_overlay_fallback_mode=env_str("INDICES_PREDICTION_FALLBACK_MODE", "neutral").lower(),
+            prediction_overlay_min_favourable_probability=max(0.0, min(1.0, env_float("INDICES_PREDICTION_MIN_FAVOURABLE_PROBABILITY", 0.50))),
+            prediction_overlay_min_posterior=max(0.0, min(1.0, env_float("INDICES_PREDICTION_MIN_POSTERIOR", 0.50))),
+            prediction_overlay_event_given_success=max(0.0, min(1.0, env_float("INDICES_PREDICTION_EVENT_GIVEN_SUCCESS", 0.60))),
+            prediction_overlay_kelly_base_fraction=max(0.001, env_float("INDICES_PREDICTION_KELLY_BASE_FRACTION", 0.04)),
+            prediction_overlay_max_size_multiplier=max(0.0, env_float("INDICES_PREDICTION_MAX_SIZE_MULTIPLIER", 1.0)),
+            prediction_overlay_score_scale=max(0.0, env_float("INDICES_PREDICTION_SCORE_SCALE", 20.0)),
             profit_lock_enabled=env_bool("PROFIT_LOCK_ENABLED", True),
             profit_lock_trigger_pct=env_float("PROFIT_LOCK_TRIGGER_PCT", 20.0),
             profit_lock_pullback_pct=env_float("PROFIT_LOCK_PULLBACK_PCT", 4.0),
