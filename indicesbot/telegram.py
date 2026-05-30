@@ -88,6 +88,13 @@ def _format_money(value: object, currency: object = None, *, signed: bool = Fals
     return f"{prefix}{sign}{amount:.2f}"
 
 
+def _float_or_none(value: object) -> float | None:
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
 def _metadata_from(value: object) -> dict[str, Any]:
     metadata = getattr(value, "metadata", None)
     if isinstance(metadata, dict):
@@ -95,6 +102,35 @@ def _metadata_from(value: object) -> dict[str, Any]:
     if isinstance(value, dict) and isinstance(value.get("metadata"), dict):
         return value["metadata"]
     return {}
+
+
+def _prediction_overlay_impact_line(value: object) -> str:
+    metadata = _metadata_from(value)
+    if not metadata.get("prediction_overlay"):
+        return "Prediction overlay: no impact"
+    reason = _safe(metadata.get("prediction_reason") or "applied")
+    event = str(metadata.get("prediction_event_title") or metadata.get("prediction_event_id") or "").strip()
+    probability = _float_or_none(metadata.get("prediction_favourable_probability"))
+    posterior = _float_or_none(metadata.get("prediction_bayesian_success_probability"))
+    size_multiplier = _float_or_none(metadata.get("prediction_size_multiplier"))
+    parts = [f"Prediction overlay: impacted | {reason}"]
+    if probability is not None:
+        parts.append(f"p {probability * 100.0:.0f}%")
+    if posterior is not None:
+        parts.append(f"posterior {posterior * 100.0:.0f}%")
+    if size_multiplier is not None:
+        parts.append(f"size {size_multiplier:.2f}x")
+    if event:
+        parts.append(f"event {_safe(event[:80])}")
+    return " | ".join(parts)
+
+
+def _prediction_overlay_status_line(state: dict[str, Any]) -> str:
+    status = state.get("prediction_overlay_status")
+    if isinstance(status, dict):
+        status = status.get("text") or status.get("summary")
+    text = str(status or "not reported").strip()
+    return f"Prediction overlay: {_safe(text)}"
 
 
 def _currency_from(value: object) -> str | None:
@@ -351,6 +387,7 @@ def status_message(state: dict[str, Any]) -> str:
         f"📂 Open positions: {len(positions)}",
         f"🔎 Last scan: {_format_status(last_scan.get('status'))}",
         f"🚧 Last blocker: {_safe(_humanize(last_scan.get('blocked_by'), 'none'))}",
+        _prediction_overlay_status_line(state),
     ]
     focus = last_scan.get("symbol") or last_scan.get("best_opportunity")
     if focus:
@@ -407,6 +444,7 @@ def order_opened_message(position: IndexPosition) -> str:
         f"P&L: {_format_money(0.0, currency, signed=True)} (+0.00% of margin)",
         f"Margin used: {_format_money(margin_used, currency)}{_estimated_label(margin_estimated)}",
         _risk_context(position, currency),
+        _prediction_overlay_impact_line(position),
         f"Entry: {_format_price(position.entry_price)}",
         f"Stop: {_format_price(position.stop_price)}",
         f"Target: {target}",

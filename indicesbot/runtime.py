@@ -26,6 +26,15 @@ from indicesbot.telegram import TelegramClient, help_message, order_opened_messa
 log = logging.getLogger(__name__)
 
 
+def _prediction_overlay_status(config: IndicesConfig, prediction_state: dict[str, Any] | None) -> str:
+    if not config.prediction_overlay_enabled:
+        return "disabled"
+    state_file = str(config.prediction_overlay_state_file or "").strip()
+    source = "state file configured" if state_file else "state file missing"
+    loaded = "state loaded" if isinstance(prediction_state, dict) else "no state loaded"
+    return f"enabled | {loaded} | {source} | fallback {config.prediction_overlay_fallback_mode}"
+
+
 class IndicesRuntime:
     def __init__(self, config: IndicesConfig | None = None, client: OandaClient | None = None, telegram: TelegramClient | None = None) -> None:
         self.config = config or load_config()
@@ -152,6 +161,7 @@ class IndicesRuntime:
         log.info("oanda_account_summary_loaded currency=%s nav_positive=%s margin_available_positive=%s", account.currency, account.nav > 0, account.margin_available > 0)
         prediction_payload = load_prediction_state_payload(self.config.prediction_overlay_state_file) if self.config.prediction_overlay_enabled else None
         prediction_state = select_point_in_time_prediction_state(prediction_payload, now)
+        state["prediction_overlay_status"] = _prediction_overlay_status(self.config, prediction_state)
         all_opportunities = []
         all_reasons: list[str] = []
         for symbol in self.config.universe:
@@ -858,6 +868,7 @@ def _runtime_status_payload(state: dict[str, Any], status: str) -> dict[str, Any
         "profit_factor": None,
         "open_positions": rows,
         "last_scan": state.get("last_scan", {}),
+        "prediction_overlay_status": state.get("prediction_overlay_status"),
     }
 
 
