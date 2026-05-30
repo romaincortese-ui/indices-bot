@@ -13,6 +13,7 @@ from indicesbot.config import IndicesConfig, load_config
 from indicesbot.daily_review import write_daily_review
 from indicesbot.news import default_macro_state, high_impact_event_block, load_macro_state, parse_events
 from indicesbot.oanda_client import OandaClient
+from indicesbot.prediction_overlay import apply_prediction_overlay, load_prediction_state_payload, select_point_in_time_prediction_state
 from indicesbot.regimes import classify_regime
 from indicesbot.risk_off import macro_strategy_allowed, opportunity_min_score, profit_lock_thresholds, risk_off_aggressive_active, spread_cap_atr
 from indicesbot.risk import can_open, fill_price_from_response, order_id_from_response, position_from_opportunity, position_to_row
@@ -149,6 +150,8 @@ class IndicesRuntime:
             "currency": account.currency,
         }
         log.info("oanda_account_summary_loaded currency=%s nav_positive=%s margin_available_positive=%s", account.currency, account.nav > 0, account.margin_available > 0)
+        prediction_payload = load_prediction_state_payload(self.config.prediction_overlay_state_file) if self.config.prediction_overlay_enabled else None
+        prediction_state = select_point_in_time_prediction_state(prediction_payload, now)
         all_opportunities = []
         all_reasons: list[str] = []
         for symbol in self.config.universe:
@@ -193,6 +196,30 @@ class IndicesRuntime:
             for opportunity in opportunities:
                 score_offset, risk_multiplier = strategy_adjustment(calibration, symbol=symbol, strategy=opportunity.strategy, direction=opportunity.direction)
                 adjusted.append(replace(opportunity, score=opportunity.score + score_offset, risk_multiplier=opportunity.risk_multiplier * risk_multiplier))
+            if self.config.prediction_overlay_enabled:
+                overlay_adjusted = []
+                for opportunity in adjusted:
+                    overlaid = apply_prediction_overlay(
+                        opportunity,
+                        prediction_state,
+                        now,
+                        enabled=self.config.prediction_overlay_enabled,
+                        symbol=opportunity.symbol,
+                        side=opportunity.direction,
+                        stale_seconds=self.config.prediction_overlay_stale_seconds,
+                        fallback_mode=self.config.prediction_overlay_fallback_mode,
+                        min_favourable_probability=self.config.prediction_overlay_min_favourable_probability,
+                        min_posterior=self.config.prediction_overlay_min_posterior,
+                        event_given_success=self.config.prediction_overlay_event_given_success,
+                        kelly_base_fraction=self.config.prediction_overlay_kelly_base_fraction,
+                        max_size_multiplier=self.config.prediction_overlay_max_size_multiplier,
+                        score_scale=self.config.prediction_overlay_score_scale,
+                    )
+                    if overlaid is None:
+                        self._record_miss(state, opportunity.symbol, opportunity.direction, opportunity.strategy, "prediction_overlay_block", opportunity.score)
+                    else:
+                        overlay_adjusted.append(overlaid)
+                adjusted = overlay_adjusted
             adjusted = [opportunity for opportunity in adjusted if macro_strategy_allowed(self.config, opportunity, macro_state)]
             all_opportunities.extend(adjusted)
             all_reasons.extend([f"{symbol}:{reason}" for reason in reasons])
