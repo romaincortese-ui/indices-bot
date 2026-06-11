@@ -69,7 +69,23 @@ class IndicesRuntime:
         if not self.config.has_oanda_credentials:
             log.info("oanda_account_check skipped reason=credentials_missing")
             return
-        account = self.client.account_summary()
+        # OANDA maintenance windows return transient errors; a hard failure
+        # here crash-loops the container and the bot stays dead until a manual
+        # redeploy (observed 2026-06-05..11: 6 days down). Retry with backoff,
+        # then degrade to a warning instead of dying - the trading loop has
+        # its own per-cycle error handling.
+        account = None
+        for attempt in range(1, 6):
+            try:
+                account = self.client.account_summary()
+                break
+            except Exception as exc:
+                wait = min(300, 30 * attempt)
+                log.warning("oanda_account_check attempt %d/5 failed (%s); retrying in %ds", attempt, exc, wait)
+                time.sleep(wait)
+        if account is None:
+            log.warning("oanda_account_check unavailable after retries; continuing - run_cycle handles errors per cycle")
+            return
         log.info(
             "oanda_account_check ok env=%s currency=%s nav_positive=%s margin_available_positive=%s",
             self.config.oanda_env,
