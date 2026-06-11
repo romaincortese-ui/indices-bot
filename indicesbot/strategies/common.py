@@ -6,6 +6,7 @@ from dataclasses import replace
 from indicesbot.config import IndicesConfig
 from indicesbot.models import Candle, IndexQuote, MarketRegime, Opportunity
 from indicesbot.strategies.event_momentum import score_event_momentum
+from indicesbot.strategies.event_window import score_event_window
 from indicesbot.strategies.mean_reversion import score_mean_reversion
 from indicesbot.strategies.opening_range_breakout import score_opening_range_breakout
 from indicesbot.strategies.trend_pullback import score_trend_pullback
@@ -45,6 +46,7 @@ def evaluate_all(config: IndicesConfig, symbol: str, instrument: str, quote: Ind
         ("TREND_PULLBACK", score_trend_pullback),
         ("MEAN_REVERSION", score_mean_reversion),
         ("EVENT_MOMENTUM", score_event_momentum),
+        ("EVENT_WINDOW", score_event_window),
     )
     for strategy_name, scorer in scorers:
         if enabled and strategy_name not in enabled:

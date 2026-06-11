@@ -204,6 +204,16 @@ class IndicesRuntime:
                 self._record_miss(state, symbol, "UNKNOWN", "UNKNOWN", "candles_unavailable", 0.0)
                 continue
             regime = classify_regime(self.config, symbol, candles_h1, candles_h4, macro_state, now)
+            # Curated event windows (IPOs etc.): flat in the PRE window —
+            # spreads widen and direction is a coin flip. The POST window is
+            # traded by the EVENT_WINDOW lane, so it is intentionally NOT
+            # blocked here.
+            from indicesbot.event_window import pre_block as _ew_pre_block
+            ew_pre = _ew_pre_block(now, regime.region)
+            if ew_pre:
+                self._record_miss(state, symbol, "UNKNOWN", "UNKNOWN", "event_window_pre", 0.0)
+                all_reasons.append(f"{symbol}:event_window_pre:{ew_pre.title}")
+                continue
             event_block = high_impact_event_block(regime.region, events, now, pre_minutes=self.config.pre_event_pause_minutes, post_minutes=self.config.post_event_settle_minutes)
             if event_block:
                 self._record_miss(state, symbol, "UNKNOWN", "UNKNOWN", "event_pause", 0.0)
