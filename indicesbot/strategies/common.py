@@ -66,9 +66,24 @@ def evaluate_all(config: IndicesConfig, symbol: str, instrument: str, quote: Ind
                 reasons.append(f"{strategy_name}:{direction.lower()}_lane_disabled")
                 continue
             opportunity = scorer(config, symbol, instrument, direction, quote, candles_m15, candles_h1, candles_h4, regime, macro_state, reasons)
+            if opportunity is not None and not _net_rr_ok(config, opportunity, quote.spread):
+                reasons.append(f"{strategy_name}:net_rr_below_floor")
+                opportunity = None
             if opportunity is not None:
                 opportunities.append(apply_regime(opportunity, regime))
     return opportunities
+
+
+def _net_rr_ok(config: IndicesConfig, opportunity: Opportunity, spread: float) -> bool:
+    """Reward net of the spread must be >= min_net_rr x risk. At a ~33% win rate
+    the winners must outsize the losers or the strategy drip-loses; the spread on
+    M15 index scalps is large enough to invert a nominal 1.7 RR."""
+    min_rr = max(0.0, getattr(config, "min_net_rr", 0.0))
+    if min_rr <= 0 or opportunity.take_profit_price is None:
+        return True
+    risk = abs(opportunity.entry_price - opportunity.stop_price)
+    reward = abs(opportunity.take_profit_price - opportunity.entry_price) - max(spread, 0.0)
+    return risk > 0 and reward / risk >= min_rr
 
 
 def select_best_opportunities(opportunities: list[Opportunity], *, min_score: float = 70.0, limit: int | None = None, score_threshold: Callable[[Opportunity], float] | None = None) -> list[Opportunity]:

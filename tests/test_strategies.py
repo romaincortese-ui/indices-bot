@@ -93,3 +93,19 @@ def test_us_holiday_blocks_us_index_opening_range() -> None:
 
     assert opportunities == []
     assert "OPENING_RANGE_BREAKOUT:us_market_holiday" in reasons
+
+
+def test_net_rr_floor_blocks_spread_inverted_setups() -> None:
+    from dataclasses import replace as _replace
+    from indicesbot.config import IndicesConfig
+    from indicesbot.models import Opportunity
+    from indicesbot.strategies.common import _net_rr_ok
+    config = _replace(IndicesConfig.from_env(), min_net_rr=1.5)
+    # risk 10, reward 12, spread 2 -> net reward 10 -> net RR 1.0 < 1.5 => blocked
+    opp = Opportunity("SPX500", "SPX500_USD", "LONG", "TEST", 80, 5000, 4990, 5012, 10, 1.7, 1, "t", {})
+    assert _net_rr_ok(config, opp, 2.0) is False
+    # reward 15, no spread -> net RR 1.5 => allowed
+    opp2 = Opportunity("SPX500", "SPX500_USD", "LONG", "TEST", 80, 5000, 4990, 5015, 10, 1.7, 1, "t", {})
+    assert _net_rr_ok(config, opp2, 0.0) is True
+    # floor disabled => always allowed
+    assert _net_rr_ok(_replace(config, min_net_rr=0.0), opp, 2.0) is True

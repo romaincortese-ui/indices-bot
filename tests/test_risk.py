@@ -203,3 +203,15 @@ def test_can_open_blocks_total_indices_risk() -> None:
 
     assert ok is False
     assert reason == "max_total_indices_risk"
+
+
+def test_min_unit_margin_viability_blocks_tiny_account() -> None:
+    from indicesbot.risk import min_unit_margin_viability
+    config = IndicesConfig.from_env()
+    details = InstrumentDetails("US30_USD", margin_rate=0.05, minimum_trade_size=1.0)
+    # £14 NAV vs min-unit margin 44000*5% = 2200 -> impossible, ever
+    ok, reason, pct = min_unit_margin_viability(44000, 14, 14, details, 1.0, config)
+    assert ok is False and pct > 1.0
+    # large account -> viable
+    ok2, _, _ = min_unit_margin_viability(44000, 100000, 100000, details, 1.0, config)
+    assert ok2 is True

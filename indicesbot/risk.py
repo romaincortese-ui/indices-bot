@@ -91,6 +91,25 @@ def position_from_opportunity(opportunity: Opportunity, config: IndicesConfig, a
     )
 
 
+def min_unit_margin_viability(price: float, nav: float, margin_available: float, details: InstrumentDetails, conversion_factor: float, config: IndicesConfig) -> tuple[bool, str, float]:
+    """Can this account EVER open the instrument's minimum size? Margin-only check
+    (risk caps are per-signal and vary with the stop; margin is the hard floor).
+    Live evidence: 109 signals died on units_below_minimum because a small NAV
+    cannot meet index minimums — this makes that visible instead of silent.
+    Returns (viable, reason, min_unit_margin_nav_pct)."""
+    unit_step = _unit_step(details)
+    minimum_trade_size = max(details.minimum_trade_size, unit_step)
+    margin_per_unit = max(price, 0.0001) * max(details.margin_rate, 0.0001) * max(conversion_factor, 0.0001)
+    min_margin = minimum_trade_size * margin_per_unit
+    nav = max(nav, 0.0001)
+    margin_nav_pct = min_margin / nav
+    if min_margin > max(0.0, margin_available) * max(config.max_margin_per_entry_pct, 0.0001):
+        return False, "min_unit_margin_above_available", margin_nav_pct
+    if config.min_unit_floor_enabled and margin_nav_pct > max(0.0, config.min_unit_floor_small_account_max_margin_nav_pct):
+        return False, "min_unit_margin_above_small_account_cap", margin_nav_pct
+    return True, "ok", margin_nav_pct
+
+
 def can_open(position: IndexPosition, state: dict[str, Any], config: IndicesConfig) -> tuple[bool, str]:
     if position.units <= 0:
         return False, "units_below_minimum"

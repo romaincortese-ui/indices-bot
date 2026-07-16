@@ -158,6 +158,9 @@ class IndicesConfig:
     prediction_overlay_max_size_multiplier: float
     prediction_overlay_score_scale: float
     min_score: float
+    min_net_rr: float
+    tradability_filter_enabled: bool
+    heartbeat_hours: float
     max_hold_bars: int
     bar_minutes: int
     enabled_strategies: tuple[str, ...]
@@ -255,6 +258,12 @@ class IndicesConfig:
             min_unit_floor_small_account_max_margin_nav_pct=env_float("INDICES_MIN_UNIT_FLOOR_SMALL_ACCOUNT_MAX_MARGIN_NAV_PCT", 0.60),
             min_unit_floor_max_target_risk_multiple=env_float("INDICES_MIN_UNIT_FLOOR_MAX_TARGET_RISK_MULTIPLE", 12.0),
             min_score=env_float("INDICES_MIN_SCORE", 78.0),
+            # Net RR floor: reward must clear the spread AND beat risk by this
+            # multiple. Live 39-trade sample was 33% win with avg loss > avg win
+            # (best +0.25 vs worst -0.30) — a structural drip-loss without this.
+            min_net_rr=env_float("INDICES_MIN_NET_RR", 1.5),
+            tradability_filter_enabled=env_bool("INDICES_TRADABILITY_FILTER_ENABLED", True),
+            heartbeat_hours=env_float("INDICES_HEARTBEAT_HOURS", 24.0),
             max_hold_bars=env_int("INDICES_MAX_HOLD_BARS", 24),
             bar_minutes=env_int("INDICES_BAR_MINUTES", 15),
             enabled_strategies=env_csv("INDICES_ENABLED_STRATEGIES", DEFAULT_ENABLED_STRATEGIES),

@@ -16,7 +16,7 @@ from indicesbot.oanda_client import OandaClient
 from indicesbot.prediction_overlay import apply_prediction_overlay, load_prediction_state_payload, select_point_in_time_prediction_state
 from indicesbot.regimes import classify_regime
 from indicesbot.risk_off import macro_strategy_allowed, opportunity_min_score, profit_lock_thresholds, risk_off_aggressive_active, spread_cap_atr
-from indicesbot.risk import can_open, fill_price_from_response, order_id_from_response, position_from_opportunity, position_to_row
+from indicesbot.risk import can_open, fill_price_from_response, min_unit_margin_viability, order_id_from_response, position_from_opportunity, position_to_row
 from indicesbot.spread_tracker import SpreadTracker
 from indicesbot.state import StateStore
 from indicesbot.strategies import evaluate_all, select_best_opportunities
@@ -42,6 +42,8 @@ class IndicesRuntime:
         self.state_store = StateStore(path=self.config.state_file, redis_url=self.config.redis_url, redis_key=self.config.runtime_state_key)
         self.telegram = telegram or TelegramClient(token=self.config.telegram_token, chat_id=self.config.telegram_chat_id, offset_file=self.config.telegram_offset_file)
         self.spreads = SpreadTracker(window_minutes=self.config.adaptive_spread_window_minutes, multiplier=self.config.adaptive_spread_multiplier, min_samples=self.config.adaptive_spread_min_samples)
+        self._untradable: dict[str, str] = {}
+        self._tradability_at: datetime | None = None
 
     def run_forever(self) -> None:
         state = self.state_store.load()
@@ -167,6 +169,8 @@ class IndicesRuntime:
                 return state
 
         account = self.client.account_summary()
+        self._maybe_refresh_tradability(state, account, now)
+        self._maybe_send_heartbeat(state, account, now)
         state["last_account"] = {
             "balance": account.balance,
             "nav": account.nav,
@@ -185,6 +189,8 @@ class IndicesRuntime:
             if not instrument:
                 self._record_miss(state, symbol, "UNKNOWN", "UNKNOWN", "instrument_unavailable", 0.0)
                 continue
+            if symbol in self._untradable:
+                continue  # account can't meet min size — reported by tradability refresh, not re-logged per cycle
             try:
                 ok, tradeable_reason = self.client.instrument_tradeable(instrument)
                 if not ok:
@@ -715,6 +721,73 @@ class IndicesRuntime:
             redis_url=self.config.redis_url,
             redis_key=self.config.macro_state_key,
             max_age_minutes=self.config.macro_state_max_age_minutes,
+        )
+
+    def _maybe_refresh_tradability(self, state: dict[str, Any], account: Any, now: datetime) -> None:
+        """Daily: which universe symbols can this account's NAV actually open at
+        minimum size? Skip the rest and TELL the operator — 109 signals died
+        silently on units_below_minimum before this existed. Fail-open per symbol."""
+        if not self.config.tradability_filter_enabled:
+            return
+        if self._tradability_at is not None and (now - self._tradability_at) < timedelta(hours=24):
+            return
+        self._tradability_at = now
+        untradable: dict[str, str] = {}
+        for symbol in self.config.universe:
+            instrument = self.config.oanda_instrument_for(symbol)
+            if not instrument:
+                continue
+            try:
+                details = self.client.instrument_details(instrument)
+                quote = self.client.current_quote(symbol, instrument)
+                price = max(quote.ask, quote.bid, 0.0001)
+                conversion = self.client.home_conversion_factor(instrument, "LONG")
+                ok, reason, margin_pct = min_unit_margin_viability(
+                    price, max(account.nav, account.balance), account.margin_available, details, conversion, self.config,
+                )
+                if not ok:
+                    untradable[symbol] = f"{reason} min_unit_margin={margin_pct:.0%} of NAV"
+            except Exception as exc:  # fail-open: a data hiccup must not exclude a market
+                log.info("tradability_check_failed symbol=%s err=%s", symbol, str(exc)[:120])
+        self._untradable = untradable
+        state["untradable_symbols"] = untradable
+        if untradable:
+            log.warning("tradability_filter untradable=%s", ",".join(sorted(untradable)))
+            lines = "\n".join(f"• {sym}: {escape(reason)}" for sym, reason in sorted(untradable.items()))
+            self.telegram.send(
+                f"⚠️ <b>Indices tradability</b>\n"
+                f"Scanning <b>{len(self.config.universe) - len(untradable)}/{len(self.config.universe)}</b> indices — "
+                f"account too small for minimum size on:\n{lines}"
+            )
+
+    def _maybe_send_heartbeat(self, state: dict[str, Any], account: Any, now: datetime) -> None:
+        """Periodic loud status: effective mode, NAV, tradable universe, top block
+        reasons. One-shot alerts rot (FX sat silently forced-paper for 6.5 weeks);
+        a heartbeat cannot be missed twice."""
+        hours = max(0.0, self.config.heartbeat_hours)
+        if hours <= 0 or not self.telegram.enabled:
+            return
+        last = _parse_datetime(state.get("last_heartbeat_at"))
+        if last is not None and (now - last) < timedelta(hours=hours):
+            return
+        state["last_heartbeat_at"] = now.isoformat()
+        state["missed_opportunities"] = state.get("missed_opportunities", [])[-500:]
+        cutoff = now - timedelta(hours=max(hours, 24.0))
+        reasons: dict[str, int] = {}
+        for miss in state.get("missed_opportunities", []):
+            at = _parse_datetime(miss.get("at"))
+            if at is None or at < cutoff:
+                continue
+            key = str(miss.get("blocked_by") or "unknown")[:60]
+            reasons[key] = reasons.get(key, 0) + 1
+        top = ", ".join(f"{k}×{v}" for k, v in sorted(reasons.items(), key=lambda kv: -kv[1])[:5]) or "none"
+        excluded = ", ".join(sorted(self._untradable)) or "none"
+        self.telegram.send(
+            f"🩺 <b>Indices heartbeat</b>\n"
+            f"Mode: <b>{escape(self.config.execution_mode)}</b> | NAV <b>{account.nav:.2f} {escape(account.currency)}</b>\n"
+            f"Tradable: <b>{len(self.config.universe) - len(self._untradable)}/{len(self.config.universe)}</b> (excluded: {escape(excluded)})\n"
+            f"Blocks last {max(hours, 24.0):.0f}h: {escape(top)}\n"
+            f"Open positions: {len(state.get('open_positions', []) or [])}"
         )
 
     def _record_miss(self, state: dict[str, Any], symbol: str, direction: str, strategy: str, reason: str, score: float) -> None:
