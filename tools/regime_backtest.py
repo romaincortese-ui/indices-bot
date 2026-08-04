@@ -37,7 +37,8 @@ from datetime import datetime, timezone
 TOKEN = (os.environ.get("OANDA_API_KEY") or os.environ.get("OANDA_API_TOKEN") or "").strip()
 URL = (os.environ.get("OANDA_API_URL") or "https://api-fxtrade.oanda.com").rstrip("/")
 
-INSTRUMENTS = ["DE30_EUR", "SPX500_USD", "NAS100_USD", "UK100_GBP"]
+_DEFAULT = "DE30_EUR,SPX500_USD,NAS100_USD,UK100_GBP"
+INSTRUMENTS = [s.strip() for s in os.environ.get("BACKTEST_INSTRUMENTS", _DEFAULT).split(",") if s.strip()]
 
 # Cost assumptions. Stated loudly because the whole answer hinges on them.
 SPREAD_PCT = 0.0174 / 100      # round-trip, measured from the live bot's own fills
